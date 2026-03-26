@@ -51,7 +51,8 @@ sys.path.insert(0, ".")
 
 from backend.db.models import Game, NrfiFeatures
 from backend.db.session import SessionLocal
-from backend.modeling.model_store import DEFAULT_MODEL_PATH, CalibratedModel, save_model
+from backend.modeling.model_classes import CalibratedModel, XGBModel
+from backend.modeling.model_store import DEFAULT_MODEL_PATH, save_model
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -142,66 +143,6 @@ def evaluate(label: str, model: Any, X: pd.DataFrame, y: pd.Series) -> dict[str,
     return {"auc": auc, "log_loss": ll, "brier": brier}
 
 
-class _XGBModel(BaseEstimator, ClassifierMixin):
-    """
-    Sklearn-compatible wrapper around (SimpleImputer + XGBClassifier).
-
-    Kept separate from Pipeline so we can pass a validation eval_set for early
-    stopping — something Pipeline makes awkward.  Fully picklable, so it drops
-    straight into model_store.save_model / load_model.
-    """
-
-    def __init__(self) -> None:
-        self.imputer_: SimpleImputer | None = None
-        self.clf_: XGBClassifier | None = None
-        self.classes_ = np.array([0, 1])
-
-    def fit(
-        self,
-        X: pd.DataFrame,
-        y: pd.Series,
-        X_val: pd.DataFrame | None = None,
-        y_val: pd.Series | None = None,
-    ) -> "_XGBModel":
-        self.imputer_ = SimpleImputer(strategy="median")
-        X_imp = self.imputer_.fit_transform(X)
-
-        eval_set = None
-        if X_val is not None and y_val is not None:
-            X_val_imp = self.imputer_.transform(X_val)
-            eval_set = [(X_val_imp, y_val)]
-
-        self.clf_ = XGBClassifier(
-            n_estimators=2000,        # lots of rounds; early stopping picks the right number
-            max_depth=3,              # shallow trees to limit memorisation
-            learning_rate=0.005,      # slow learning pairs well with many rounds
-            subsample=0.7,
-            colsample_bytree=0.6,
-            min_child_weight=100,     # each leaf must cover ≥1.3% of training set
-            gamma=1.0,                # minimum loss-reduction to make a split
-            reg_alpha=0.5,            # L1
-            reg_lambda=5.0,           # L2
-            eval_metric="logloss",
-            early_stopping_rounds=50 if eval_set else None,
-            use_label_encoder=False,
-            random_state=42,
-            verbosity=0,
-        )
-        self.clf_.fit(
-            X_imp, y,
-            eval_set=eval_set,
-            verbose=False,
-        )
-        if eval_set:
-            logger.info("  XGB early stopping: best round = %d", self.clf_.best_iteration)
-        return self
-
-    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        X_imp = self.imputer_.transform(X)
-        return self.clf_.predict_proba(X_imp)
-
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
-        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
 
 
 
@@ -252,7 +193,7 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     # XGBoost with early stopping on validation set
     # -----------------------------------------------------------------------
     logger.info("--- XGBoost (early stopping on val set) ---")
-    xgb_model = _XGBModel()
+    xgb_model = XGBModel()
     xgb_model.fit(X_train, y_train, X_val=X_val, y_val=y_val)
     evaluate("XGB Train", xgb_model, X_train, y_train)
     xgb_val = evaluate("XGB Val  ", xgb_model, X_val, y_val)

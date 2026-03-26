@@ -11,32 +11,13 @@ import os
 import pickle
 from pathlib import Path
 from typing import Any
-from typing import Any
+
+# Import model classes so pickle can resolve them when loading from any script
+from backend.modeling.model_classes import CalibratedModel, XGBModel  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATH = os.environ.get("MODEL_ARTIFACT_PATH", "models/nrfi_model.pkl")
-
-
-class CalibratedModel:
-    """
-    Platt scaling wrapper: applies a 2-parameter logistic regression on raw
-    model scores from a held-out val set.  Fully picklable from any script
-    because it lives in a stable module (not __main__).
-    """
-
-    def __init__(self, base_model: Any, calibrator: Any) -> None:
-        self.base_model = base_model
-        self.calibrator = calibrator
-
-    def predict_proba(self, X: Any) -> Any:
-        import numpy as np
-        raw = self.base_model.predict_proba(X)[:, 1].reshape(-1, 1)
-        return self.calibrator.predict_proba(raw)
-
-    def predict(self, X: Any) -> Any:
-        import numpy as np
-        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
 
 
 def save_model(model: Any, path: str = DEFAULT_MODEL_PATH) -> None:
