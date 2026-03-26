@@ -51,7 +51,7 @@ sys.path.insert(0, ".")
 
 from backend.db.models import Game, NrfiFeatures
 from backend.db.session import SessionLocal
-from backend.modeling.model_store import DEFAULT_MODEL_PATH, save_model
+from backend.modeling.model_store import DEFAULT_MODEL_PATH, CalibratedModel, save_model
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -204,27 +204,6 @@ class _XGBModel(BaseEstimator, ClassifierMixin):
         return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
 
 
-class _CalibratedModel:
-    """
-    Platt scaling: fits a 2-parameter logistic regression on raw model scores
-    from a held-out val set.  Only 2 parameters → can't meaningfully overfit
-    even with small val sets.  Fully picklable.
-
-    Why Platt over isotonic: isotonic regression uses many knots and overfits
-    at val-set sizes typical for a single MLB season (~1000 games).
-    """
-
-    def __init__(self, base_model: Any, calibrator: _PlattLR) -> None:
-        self.base_model = base_model
-        self.calibrator = calibrator
-
-    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        raw = self.base_model.predict_proba(X)[:, 1].reshape(-1, 1)
-        return self.calibrator.predict_proba(raw)  # returns [P(0), P(1)]
-
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
-        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
-
 
 def _build_logistic_pipeline() -> Pipeline:
     return Pipeline([
@@ -310,7 +289,7 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     raw_val_probs = winner.predict_proba(X_val)[:, 1].reshape(-1, 1)
     platt = _PlattLR(C=1.0, max_iter=1000)
     platt.fit(raw_val_probs, y_val)
-    calibrated = _CalibratedModel(winner, platt)
+    calibrated = CalibratedModel(winner, platt)
 
     cal_val  = evaluate("Calibrated Val ", calibrated, X_val,  y_val)
     cal_test = evaluate("Calibrated Test", calibrated, X_test, y_test)
