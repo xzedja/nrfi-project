@@ -22,9 +22,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    env_file: .env
     environment:
       DATABASE_URL: postgresql://nrfi:nrfi@db:5432/nrfi
+      ODDS_API_KEY: ${ODDS_API_KEY}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      MODEL_ARTIFACT_PATH: ${MODEL_ARTIFACT_PATH:-models/nrfi_model.pkl}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "8000:8000"
     volumes:
@@ -37,9 +40,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    env_file: .env
     environment:
       DATABASE_URL: postgresql://nrfi:nrfi@db:5432/nrfi
+      ODDS_API_KEY: ${ODDS_API_KEY}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      MODEL_ARTIFACT_PATH: ${MODEL_ARTIFACT_PATH:-models/nrfi_model.pkl}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - .:/app
       - model_store:/app/models
