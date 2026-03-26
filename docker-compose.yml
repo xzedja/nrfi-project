@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nrfi
+      POSTGRES_PASSWORD: nrfi
+      POSTGRES_DB: nrfi
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nrfi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://nrfi:nrfi@db:5432/nrfi
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app           # live reload during dev
+      - model_store:/app/models
+
+  scheduler:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://nrfi:nrfi@db:5432/nrfi
+    volumes:
+      - .:/app
+      - model_store:/app/models
+    command: ["/bin/bash", "/app/scripts/start_cron.sh"]
+
+volumes:
+  postgres_data:
+  model_store:
