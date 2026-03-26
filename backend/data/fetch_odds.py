@@ -124,8 +124,12 @@ def _fetch_raw_odds(date_str: str) -> list[dict[str, Any]]:
         "markets": "h2h,totals",
         "dateFormat": "iso",
         "oddsFormat": "american",
+        # commenceTime is UTC. US games on date_str can start as late as
+        # ~03:00Z the following day (10 PM ET / 7 PM PT). Use +1 day noon UTC
+        # as the upper bound so we catch all same-date games without pulling
+        # in the next calendar day's slate.
         "commenceTimeFrom": f"{date_str}T00:00:00Z",
-        "commenceTimeTo": f"{date_str}T23:59:59Z",
+        "commenceTimeTo": f"{(date.fromisoformat(date_str) + timedelta(days=1)).isoformat()}T12:00:00Z",
     }
     try:
         resp = requests.get(_ODDS_API_BASE, params=params, timeout=_REQUEST_TIMEOUT)
