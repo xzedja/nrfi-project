@@ -29,7 +29,6 @@ services:
     ports:
       - "4000:8000"
     volumes:
-      - .:/app           # live reload during dev
       - model_store:/app/models
 
   scheduler:
@@ -45,7 +44,6 @@ services:
       MODEL_ARTIFACT_PATH: ${MODEL_ARTIFACT_PATH:-models/nrfi_model.pkl}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      - .:/app
       - model_store:/app/models
     command: ["/bin/bash", "/app/scripts/start_cron.sh"]
 
