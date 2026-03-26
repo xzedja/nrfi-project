@@ -157,8 +157,7 @@ def _open_meteo_request(lat: float, lon: float, start: str, end: str, tz: str) -
         "wind_speed_unit": "mph",
         "timezone": tz,
     }
-    if use_forecast:
-        params["forecast_days"] = 3
+    # forecast API accepts start_date/end_date directly — don't also pass forecast_days
 
     for attempt in range(4):
         try:

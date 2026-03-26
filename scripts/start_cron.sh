@@ -11,8 +11,13 @@ set -euo pipefail
 # Dump current env vars to /etc/environment for cron to source
 printenv | grep -v "^_=" > /etc/environment
 
-# Write the crontab — runs daily at 9:03 AM
-echo "3 9 * * * . /etc/environment; cd /app && python scripts/run_daily.py >> /app/logs/daily.log 2>&1" | crontab -
+# Write the crontab
+# 9:03 AM  — morning pipeline (schedule + features + odds + Discord post)
+# 2:00 AM  — post-game results (fill in first-inning outcomes for completed games)
+(
+  echo "3 9 * * * . /etc/environment; cd /app && python scripts/run_daily.py >> /app/logs/daily.log 2>&1"
+  echo "0 2 * * * . /etc/environment; cd /app && python scripts/backfill_game_results.py >> /app/logs/results.log 2>&1"
+) | crontab -
 
 echo "Crontab installed:"
 crontab -l
