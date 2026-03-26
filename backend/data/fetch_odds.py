@@ -268,18 +268,30 @@ def fetch_and_store_odds(date_str: str | None = None, db: Session | None = None)
             for k in [k for k in markets if k.startswith("_h2h_")]:
                 markets.pop(k)
 
-            odds_row = Odds(
-                game_id=game.id,
-                source=source,
-                market="total",
-                home_ml=home_ml,
-                away_ml=away_ml,
-                total=markets["total"],
-                total_over_odds=markets["total_over_odds"],
-                total_under_odds=markets["total_under_odds"],
-                fetched_at=datetime.now(timezone.utc),
-            )
-            db.add(odds_row)
+            # Sanity-check the total — alternate/half-game lines slip in from
+            # fallback bookmakers (e.g. 3.5 = first-5 total, 11.5 = alt line).
+            # MLB full-game totals are always in the 5–15 range.
+            raw_total = markets["total"]
+            if raw_total is not None and not (5.0 <= raw_total <= 15.0):
+                logger.warning(
+                    "Skipping implausible total %.1f for %s @ %s — likely alternate market.",
+                    raw_total, away_abbrev, home_abbrev,
+                )
+                markets["total"] = None
+                markets["total_over_odds"] = None
+                markets["total_under_odds"] = None
+
+            # Upsert: update existing odds row rather than inserting a duplicate
+            odds_row = db.query(Odds).filter_by(game_id=game.id, source=source).first()
+            if odds_row is None:
+                odds_row = Odds(game_id=game.id, source=source, market="total")
+                db.add(odds_row)
+            odds_row.home_ml = home_ml
+            odds_row.away_ml = away_ml
+            odds_row.total = markets["total"]
+            odds_row.total_over_odds = markets["total_over_odds"]
+            odds_row.total_under_odds = markets["total_under_odds"]
+            odds_row.fetched_at = datetime.now(timezone.utc)
 
             # Update p_nrfi_market on the features row if we have a total
             if markets["total"] is not None:
