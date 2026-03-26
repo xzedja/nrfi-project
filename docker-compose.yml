@@ -6,8 +6,6 @@ services:
       POSTGRES_USER: nrfi
       POSTGRES_PASSWORD: nrfi
       POSTGRES_DB: nrfi
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
