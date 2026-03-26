@@ -31,6 +31,8 @@ sys.path.insert(0, ".")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+from sqlalchemy import extract
+
 from backend.data.fetch_stats import load_games_for_season, load_starting_pitchers_for_season
 from backend.db.models import Game, GamePitchers, Pitcher
 from backend.db.session import SessionLocal
@@ -50,6 +52,20 @@ def _upsert_pitcher(db, external_id: int, throws: str | None) -> Pitcher:
 
 
 def backfill_season(season: int) -> None:
+    db = SessionLocal()
+    try:
+        existing_count = (
+            db.query(Game)
+            .filter(extract("year", Game.game_date) == season)
+            .count()
+        )
+    finally:
+        db.close()
+
+    if existing_count > 0:
+        logger.info("=== Season %s already in DB (%d games) — skipping. ===", season, existing_count)
+        return
+
     logger.info("=== Backfilling season %s ===", season)
 
     games = load_games_for_season(season)

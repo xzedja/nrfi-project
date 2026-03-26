@@ -40,6 +40,8 @@ _STATCAST_COLS = [
     "at_bat_number",
     "pitch_number",
     "post_bat_score",
+    "release_speed",   # for velocity trend features
+    "events",          # for WHIP computation (hits + walks per IP)
 ]
 
 

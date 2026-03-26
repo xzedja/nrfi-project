@@ -14,54 +14,49 @@ We are using FastAPI.
 - Main app in `backend/api/main.py`
 - Routers in `backend/api/routers/`
 
-## App Structure
+## App Structure (Implemented)
 
-Implement:
+All endpoints below are live.
 
 1. `backend/api/main.py`
-   - Create `FastAPI()` instance.
-   - Include routers:
-     - `health_router` from `routers/health.py`
-     - `games_router` from `routers/games.py`
-     - `nrfi_router` from `routers/nrfi.py`
-   - Configure basic CORS for the eventual frontend.
-   - Add root route `/` that returns a simple JSON message.
+   - Creates `FastAPI()` instance with CORS middleware (allow all origins for dev).
+   - Includes `health_router`, `games_router`, `nrfi_router`.
+   - Root route `/` returns `{"message": "NRFI API"}`.
 
 2. `backend/api/routers/health.py`
-   - Router with:
-     - `GET /health`:
-       - Returns `{ "status": "ok" }` and optionally DB connectivity info.
+   - `GET /health` — runs `SELECT 1` to verify DB connectivity, returns `{"status": "ok"}`.
 
 3. `backend/api/routers/games.py`
-   - Router with endpoints like:
-     - `GET /games/today`:
-       - Returns basic info for today’s games: game_id, teams, start time.
-     - `GET /games/{game_id}`:
-       - Returns detail for a single game.
+   - `GET /games/today` — returns games for today from the DB.
+   - `GET /games/{game_id}` — returns detail for a single game.
 
 4. `backend/api/routers/nrfi.py`
-   - Router with endpoints:
-     - `GET /nrfi/{game_id}`:
-       - Uses `predict_for_game` to return:
-         - `game_id`
-         - `p_nrfi_model`
-         - `p_nrfi_market` (if available)
-         - `edge`
-     - `GET /nrfi/today`:
-       - Lists predictions for today’s games (joining game listing + prediction).
+   - `GET /nrfi/today` — returns predictions for all of today's games.
+   - `GET /nrfi/{game_id}` — returns prediction for a single game (404 if not found).
+   - **IMPORTANT:** `/nrfi/today` is registered BEFORE `/{game_id}` to prevent "today" being parsed as an integer.
+
+## API Response Format
+
+```json
+{
+  "game_id": 123,
+  "home_team": "LAD",
+  "away_team": "SF",
+  "game_date": "2026-04-02",
+  "p_nrfi_model": 0.61,
+  "p_nrfi_market": 0.55,
+  "edge": 0.06
+}
+```
+
+- `p_nrfi_model` — model's probability that no run scores in the first inning
+- `p_nrfi_market` — implied P(NRFI) derived from game total via Poisson approximation
+- `edge` — `p_nrfi_model - p_nrfi_market` (positive = model thinks NRFI is more likely than market implies)
 
 ## API Conventions
 
 - Use Pydantic models for request/response bodies.
-- Return JSON with clear field names, e.g.:
-
-  ```json
-  {
-    "game_id": 123,
-    "home_team": "LAD",
-    "away_team": "SF",
-    "game_date": "2026-04-02",
-    "p_nrfi_model": 0.61,
-    "p_nrfi_market": 0.55,
-    "edge": 0.06
-  }
+- Use dependency-injected DB sessions from `backend/db/session.py` (`get_db()`).
+- Return 404 with a clear message if a resource is not found.
+- Document endpoints with concise docstrings.
+- Predictions route through `backend/modeling/predict.py` (`predict_for_game`, `predict_for_today`).

@@ -103,6 +103,17 @@ class Odds(Base):
     game = relationship("Game", back_populates="odds")
 
 
+class GameUmpire(Base):
+    __tablename__ = "game_umpires"
+
+    id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=False, unique=True, index=True)
+    ump_id = Column(Integer, nullable=False, index=True)   # MLB umpire person ID
+    ump_name = Column(String(100), nullable=True)
+
+    game = relationship("Game")
+
+
 class NrfiFeatures(Base):
     __tablename__ = "nrfi_features"
 
@@ -124,17 +135,33 @@ class NrfiFeatures(Base):
     away_sp_hr9 = Column(Float, nullable=True)
 
     # Team offense features
-    home_team_obp = Column(Float, nullable=True)
-    home_team_slg = Column(Float, nullable=True)
-    home_team_ops = Column(Float, nullable=True)
     home_team_first_inn_runs_per_game = Column(Float, nullable=True)
-    away_team_obp = Column(Float, nullable=True)
-    away_team_slg = Column(Float, nullable=True)
-    away_team_ops = Column(Float, nullable=True)
     away_team_first_inn_runs_per_game = Column(Float, nullable=True)
 
     # Park factor
     park_factor = Column(Float, nullable=True)
+
+    # Weather features (None for dome parks)
+    temperature_f = Column(Float, nullable=True)
+    wind_speed_mph = Column(Float, nullable=True)
+    wind_out_mph = Column(Float, nullable=True)   # positive = blowing toward CF
+    is_dome = Column(Float, nullable=True)        # 1.0 = dome/closed roof, 0.0 = open
+
+    # Umpire tendency (HP umpire's historical NRFI rate minus league avg, regressed)
+    ump_nrfi_rate_above_avg = Column(Float, nullable=True)
+
+    # Rolling recent-form features (last 5 starts, within-season, pre-game only)
+    home_sp_last5_era = Column(Float, nullable=True)    # ERA proxy over last 5 starts
+    home_sp_last5_whip = Column(Float, nullable=True)   # WHIP proxy over last 5 starts
+    home_sp_first_inn_era = Column(Float, nullable=True) # First-inning ERA (season-to-date)
+    home_sp_avg_velo = Column(Float, nullable=True)     # Avg fastball velo, last 5 starts
+    home_sp_velo_trend = Column(Float, nullable=True)   # Last-start velo minus 5-start avg
+
+    away_sp_last5_era = Column(Float, nullable=True)
+    away_sp_last5_whip = Column(Float, nullable=True)
+    away_sp_first_inn_era = Column(Float, nullable=True)
+    away_sp_avg_velo = Column(Float, nullable=True)
+    away_sp_velo_trend = Column(Float, nullable=True)
 
     # Target and market probability
     nrfi_label = Column(Boolean, nullable=True)

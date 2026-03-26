@@ -27,8 +27,10 @@ logger = logging.getLogger(__name__)
 
 from backend.data.fetch_today import fetch_schedule
 from backend.data.build_features import build_features_for_season
-from backend.db.models import Game, GamePitchers, Pitcher
+from backend.data.fetch_odds import fetch_and_store_odds
+from backend.db.models import Game, GamePitchers, GameUmpire, Pitcher
 from backend.db.session import SessionLocal
+from scripts.post_discord import post_predictions
 
 
 def _upsert_pitcher(db, external_id: int, name: str | None, throws: str | None) -> Pitcher:
@@ -84,6 +86,7 @@ def run_daily(target_date: str | None = None) -> None:
                 game_date=date.fromisoformat(g["game_date"]),
                 home_team=g["home_team"],
                 away_team=g["away_team"],
+                park=g.get("venue_name"),
                 # Run data intentionally null — game hasn't been played yet
             )
             db.add(game)
@@ -102,6 +105,14 @@ def run_daily(target_date: str | None = None) -> None:
                 home_sp_id=home_sp.id if home_sp else None,
                 away_sp_id=away_sp.id if away_sp else None,
             ))
+
+            if g.get("hp_ump_id") is not None:
+                db.add(GameUmpire(
+                    game_id=game.id,
+                    ump_id=g["hp_ump_id"],
+                    ump_name=g.get("hp_ump_name"),
+                ))
+
             inserted += 1
 
         db.commit()
@@ -120,6 +131,24 @@ def run_daily(target_date: str | None = None) -> None:
     season = int(target[:4])
     logger.info("Building features for season %s (new games only)...", season)
     build_features_for_season(season)
+
+    # -----------------------------------------------------------------------
+    # Step 4: Fetch odds and update p_nrfi_market
+    # -----------------------------------------------------------------------
+    logger.info("Fetching odds for %s...", target)
+    try:
+        fetch_and_store_odds(date_str=target)
+    except Exception:
+        # Odds failure is non-fatal — predictions still work without market data
+        logger.warning("Odds fetch failed — predictions will have no edge values today.")
+
+    # -----------------------------------------------------------------------
+    # Step 5: Post predictions to Discord (non-fatal if webhook not configured)
+    # -----------------------------------------------------------------------
+    try:
+        post_predictions(target_date=target)
+    except Exception:
+        logger.warning("Discord post failed — predictions are still available via API.")
 
     logger.info("Daily pipeline complete. API is ready for %s.", target)
 

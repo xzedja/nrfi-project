@@ -10,30 +10,29 @@ Goals:
 - Train and serve a model that outputs NRFI probabilities and edges vs market odds
 - Expose a FastAPI backend that the frontend can call
 
-We are starting with:
-- Historical data via `pybaseball` (free MLB stats tools)[web:48][web:51]
-- Odds via a public MLB odds API (e.g. The Odds API)[web:27][web:41]
-- A single NRFI probability model
+**Current status:** Full backend is implemented and operational. Historical data backfill (2015–present), feature building, model training, odds ingestion, daily pipeline, and API endpoints are all working.
 
 ## Tech Stack
 
-- Python 3.x
+- Python 3.11 (virtual environment at `.venv/`)
 - FastAPI for HTTP API
-- SQLAlchemy for ORM
-- Alembic for migrations (later)
+- SQLAlchemy ORM + raw SQL for migrations
 - Postgres for data (Docker in dev, managed in prod)
-- Docker + docker-compose
+- Docker + docker-compose (`db`, `backend`, `scheduler` services)
+- `pybaseball` for Statcast + Fangraphs data
+- The Odds API v4 for moneylines and totals
+- scikit-learn (logistic regression baseline)
+- XGBoost (primary model candidate)
+- `python-dotenv` for env var loading
 
 ## Repository Structure
 
-Follow this structure:
-
-- `backend/core`: configuration, logging, shared utilities
-- `backend/db`: SQLAlchemy models, DB session helpers, migrations
-- `backend/data`: raw data ingestion and feature building
-- `backend/modeling`: training, evaluation, prediction utilities
-- `backend/api`: FastAPI app and routers
-- `scripts`: one-off or batch scripts (bootstrap, backfill)
+- `backend/core/` — configuration (`config.py`), logging
+- `backend/db/` — SQLAlchemy models (`models.py`), DB session (`session.py`)
+- `backend/data/` — data ingestion and feature building
+- `backend/modeling/` — training, evaluation, prediction
+- `backend/api/` — FastAPI app and routers
+- `scripts/` — one-off and batch scripts (bootstrap, backfill, migrations, daily pipeline)
 
 When adding new backend functionality, prefer placing it into one of these existing modules.
 
@@ -49,17 +48,20 @@ When you (Claude) modify or add code in this repo:
    - Modeling code in `backend/modeling/`
    - HTTP endpoints in `backend/api/` and `backend/api/routers/`
 4. Keep code Pythonic and type-annotated where practical.
-5. When adding new external dependencies, update `pyproject.toml` or `requirements.txt`.
+5. When adding new external dependencies, update `requirements.txt`.
+6. When adding new DB columns, write a migration script in `scripts/` using `sqlalchemy.text()` and `engine.begin()`. Do not use Alembic yet.
+7. Use `python3` or `python` (inside `.venv`) — never assume a bare `python` works system-wide.
 
 ## Backend API Framework
 
 We are using FastAPI.
 
-- Create a single FastAPI app in `backend/api/main.py`
-- Use routers under `backend/api/routers/`:
+- Main app in `backend/api/main.py`
+- Routers in `backend/api/routers/`:
   - `health.py` for `/health`
-  - `games.py` for game listing endpoints
-  - `nrfi.py` for NRFI prediction endpoints
+  - `games.py` for `/games/today` and `/games/{game_id}`
+  - `nrfi.py` for `/nrfi/today` and `/nrfi/{game_id}`
+- IMPORTANT: register `/nrfi/today` BEFORE `/nrfi/{game_id}` or "today" will be parsed as an int
 
 When adding endpoints:
 - Define request/response models with Pydantic
@@ -70,15 +72,17 @@ When adding endpoints:
 
 The detailed rules for data ingestion and modeling live in `.claude/rules/data-and-model.md`. Follow those when working under `backend/data/` and `backend/modeling/`.
 
-## Next Steps for the Project
+## Completed Implementation
 
-The first implementation phases:
+All phases below are done. New work should extend, not rebuild them.
 
-1. Bootstrap Python environment and Docker/Postgres locally.
-2. Implement core config and DB session helpers.
-3. Define SQLAlchemy models for games, pitchers, odds, features.
-4. Implement a basic `/health` endpoint with FastAPI.
-5. Implement historical data backfill with `pybaseball`.
-6. Build an initial `nrfi_features` table and a baseline model.
-
-When I ask you for help (Claude), focus on moving these steps forward incrementally rather than trying to do everything at once.
+1. ✅ Python environment (`.venv`) and Docker/Postgres running locally
+2. ✅ Core config, DB session helpers
+3. ✅ SQLAlchemy models for all 6 tables
+4. ✅ FastAPI with `/health`, `/games`, `/nrfi` endpoints
+5. ✅ Historical backfill (2015–present) via `pybaseball` Statcast
+6. ✅ `NrfiFeatures` table with 23 features + trained model
+7. ✅ Odds ingestion from The Odds API with P(NRFI) approximation
+8. ✅ Daily pipeline (`run_daily.py`) with cron scheduler in Docker
+9. ✅ Within-season rolling pitcher stats (last 5 starts ERA/WHIP, first-inning ERA, velocity trend)
+10. ✅ XGBoost vs logistic regression comparison in `train_model.py`

@@ -23,6 +23,7 @@ class Settings:
     odds_api_key: str
     model_artifact_path: str
     log_level: str
+    discord_webhook_url: str  # empty string = disabled
 
 
 def get_settings() -> Settings:
@@ -50,4 +51,5 @@ def get_settings() -> Settings:
         odds_api_key=odds_api_key,
         model_artifact_path=os.environ.get("MODEL_ARTIFACT_PATH", "models/nrfi_model.pkl"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        discord_webhook_url=os.environ.get("DISCORD_WEBHOOK_URL", ""),
     )

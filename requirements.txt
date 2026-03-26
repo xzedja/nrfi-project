@@ -7,3 +7,6 @@ pydantic
 python-dotenv
 requests
 scikit-learn
+xgboost
+numpy
+pandas
