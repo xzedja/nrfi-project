@@ -31,6 +31,7 @@ from backend.data.fetch_odds import fetch_and_store_odds
 from backend.db.models import Game, GamePitchers, GameUmpire, Pitcher
 from backend.db.session import SessionLocal
 from scripts.post_discord import post_predictions
+from scripts.post_results import post_results
 
 
 def _upsert_pitcher(db, external_id: int, name: str | None, throws: str | None) -> Pitcher:
@@ -48,6 +49,14 @@ def _upsert_pitcher(db, external_id: int, name: str | None, throws: str | None) 
 def run_daily(target_date: str | None = None) -> None:
     target = target_date or str(date.today())
     logger.info("=== Daily pipeline for %s ===", target)
+
+    # -----------------------------------------------------------------------
+    # Step 0: Post yesterday's results to Discord (non-fatal)
+    # -----------------------------------------------------------------------
+    try:
+        post_results()
+    except Exception:
+        logger.warning("Results post failed — continuing with today's pipeline.")
 
     # -----------------------------------------------------------------------
     # Step 1: Fetch schedule + probable starters from MLB Stats API
