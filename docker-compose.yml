@@ -27,7 +27,7 @@ services:
       MODEL_ARTIFACT_PATH: ${MODEL_ARTIFACT_PATH:-models/nrfi_model.pkl}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "8001:8000"
+      - "4000:8000"
     volumes:
       - .:/app           # live reload during dev
       - model_store:/app/models
