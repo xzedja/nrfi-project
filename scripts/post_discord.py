@@ -42,6 +42,9 @@ _COLOR_BLUE = 0x3498DB    # header
 # Webhook payload limit: 10 embeds per request
 _MAX_EMBEDS_PER_REQUEST = 10
 
+# Edge threshold for a "strong" recommendation (same default as post_results.py)
+_VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 100.0
+
 
 def _edge_color(edge: float | None) -> int:
     if edge is None:
@@ -49,17 +52,32 @@ def _edge_color(edge: float | None) -> int:
     return _COLOR_GREEN if edge >= 0 else _COLOR_RED
 
 
-def _pct(val: float | None) -> str:
-    if val is None:
-        return "N/A"
-    return f"{val * 100:.1f}%"
+def _recommendation(edge: float, model: float) -> str:
+    """Plain-English read on whether to bet NRFI, lean NRFI, or fade."""
+    nrfi_pct = f"{model * 100:.0f}%"
+    yrfi_pct = f"{(1 - model) * 100:.0f}%"
+    edge_pct = f"{abs(edge) * 100:.0f}%"
 
-
-def _edge_str(edge: float | None) -> str:
-    if edge is None:
-        return "N/A"
-    sign = "+" if edge >= 0 else ""
-    return f"{sign}{edge * 100:.1f} pp"
+    if edge >= _VALUE_PLAY_THRESHOLD:
+        return (
+            f"🟢 **Bet NRFI** — our model gives NRFI a {nrfi_pct} chance "
+            f"vs the market's implied probability. We see {edge_pct} of extra value here."
+        )
+    elif edge > 0:
+        return (
+            f"🟡 **Lean NRFI** — our model gives NRFI a {nrfi_pct} chance. "
+            f"Slight edge over the market, but not a strong value play."
+        )
+    elif edge > -_VALUE_PLAY_THRESHOLD:
+        return (
+            f"🟡 **Lean YRFI** — our model gives NRFI only a {nrfi_pct} chance "
+            f"(YRFI {yrfi_pct}). Market is more confident in NRFI than we are."
+        )
+    else:
+        return (
+            f"🔴 **Fade NRFI** — our model gives NRFI only a {nrfi_pct} chance "
+            f"(YRFI {yrfi_pct}). Market significantly overvalues NRFI by {edge_pct}."
+        )
 
 
 def _build_game_embed(pred: dict[str, Any]) -> dict:
@@ -67,27 +85,28 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     away = pred["away_team"]
     home = pred["home_team"]
     edge = pred.get("edge")
+    model = pred.get("p_nrfi_model")
+    market = pred.get("p_nrfi_market")
+
+    if model is not None and market is not None and edge is not None:
+        sign = "+" if edge >= 0 else ""
+        data_line = f"Model {model * 100:.0f}% · Mkt {market * 100:.0f}% · Edge {sign}{edge * 100:.0f}%"
+        rec_line = _recommendation(edge, model)
+        description = f"{data_line}\n{rec_line}"
+    elif model is not None:
+        nrfi_pct = f"{model * 100:.0f}%"
+        yrfi_pct = f"{(1 - model) * 100:.0f}%"
+        description = (
+            f"Model {nrfi_pct} · Mkt N/A · Edge N/A\n"
+            f"⚪ No market lines yet — model gives NRFI a {nrfi_pct} chance (YRFI {yrfi_pct})."
+        )
+    else:
+        description = "No prediction available."
 
     return {
         "title": f"{away} @ {home}",
+        "description": description,
         "color": _edge_color(edge),
-        "fields": [
-            {
-                "name": "Model P(NRFI)",
-                "value": _pct(pred.get("p_nrfi_model")),
-                "inline": True,
-            },
-            {
-                "name": "Market P(NRFI)",
-                "value": _pct(pred.get("p_nrfi_market")),
-                "inline": True,
-            },
-            {
-                "name": "Edge",
-                "value": _edge_str(edge),
-                "inline": True,
-            },
-        ],
     }
 
 
