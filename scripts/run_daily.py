@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 from backend.data.fetch_today import fetch_schedule
 from backend.data.build_features import build_features_for_season
 from backend.data.fetch_odds import fetch_and_store_odds
-from backend.db.models import Game, GamePitchers, GameUmpire, Pitcher
+from backend.db.models import Game, GamePitchers, GameUmpire, NrfiFeatures, Pitcher
 from backend.db.session import SessionLocal
+from backend.modeling.predict import predict_for_game
 from scripts.post_discord import post_predictions
 from scripts.post_results import post_results
 
@@ -152,7 +153,31 @@ def run_daily(target_date: str | None = None) -> None:
         logger.warning("Odds fetch failed — predictions will have no edge values today.")
 
     # -----------------------------------------------------------------------
-    # Step 5: Post predictions to Discord (non-fatal if webhook not configured)
+    # Step 5: Store model predictions in nrfi_features
+    # -----------------------------------------------------------------------
+    logger.info("Storing model predictions for %s...", target)
+    db = SessionLocal()
+    try:
+        games_today = db.query(Game).filter(Game.game_date == target).all()
+        stored = 0
+        for game in games_today:
+            pred = predict_for_game(game.id, db)
+            if pred is None:
+                continue
+            feat = db.query(NrfiFeatures).filter(NrfiFeatures.game_id == game.id).first()
+            if feat is not None and feat.p_nrfi_model is None:
+                feat.p_nrfi_model = pred["p_nrfi_model"]
+                stored += 1
+        db.commit()
+        logger.info("Stored predictions for %d game(s).", stored)
+    except Exception:
+        db.rollback()
+        logger.warning("Failed to store model predictions — continuing.")
+    finally:
+        db.close()
+
+    # -----------------------------------------------------------------------
+    # Step 6: Post predictions to Discord (non-fatal if webhook not configured)
     # -----------------------------------------------------------------------
     try:
         post_predictions(target_date=target)

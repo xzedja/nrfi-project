@@ -165,6 +165,7 @@ class NrfiFeatures(Base):
 
     # Target and market probability
     nrfi_label = Column(Boolean, nullable=True)
+    p_nrfi_model = Column(Float, nullable=True)
     p_nrfi_market = Column(Float, nullable=True)
 
     game = relationship("Game", back_populates="features")
