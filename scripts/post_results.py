@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 from backend.db.models import Game, NrfiFeatures
 from backend.db.session import SessionLocal
+from backend.modeling.predict import predict_for_game
 from scripts.post_discord import _post_payload
 
 # Edge threshold (in probability, not pp) for "value plays"
@@ -67,14 +68,13 @@ def post_results(target_date: str | None = None) -> None:
 
     db = SessionLocal()
     try:
-        # Fetch games from score_date that have both a prediction and an outcome
+        # Fetch games from score_date that have an outcome recorded
         rows = (
             db.query(Game, NrfiFeatures)
             .join(NrfiFeatures, NrfiFeatures.game_id == Game.id)
             .filter(
                 Game.game_date == score_date,
                 NrfiFeatures.nrfi_label.isnot(None),
-                NrfiFeatures.p_nrfi_model.isnot(None),
             )
             .order_by(Game.game_date)
             .all()
@@ -90,11 +90,10 @@ def post_results(target_date: str | None = None) -> None:
         yday_val_w = yday_val_l = 0
 
         for game, feat in rows:
-            edge = (
-                feat.p_nrfi_model - feat.p_nrfi_market
-                if feat.p_nrfi_model is not None and feat.p_nrfi_market is not None
-                else None
-            )
+            pred = predict_for_game(game.id, db)
+            if pred is None:
+                continue
+            edge = pred["edge"]
             if edge is None or edge <= 0:
                 continue  # no pick on negative or missing edge
 
@@ -102,8 +101,8 @@ def post_results(target_date: str | None = None) -> None:
             won = actual_nrfi
             result_icon = "✅" if won else "❌"
             outcome_str = "NRFI ✓" if actual_nrfi else "YRFI"
-            model_pct = f"{feat.p_nrfi_model * 100:.0f}%"
-            mkt_pct = f"{feat.p_nrfi_market * 100:.0f}%"
+            model_pct = f"{pred['p_nrfi_model'] * 100:.0f}%"
+            mkt_pct = f"{pred['p_nrfi_market'] * 100:.0f}%"
             edge_pct = f"+{edge * 100:.0f}%"
 
             yesterday_lines.append(
@@ -139,8 +138,11 @@ def post_results(target_date: str | None = None) -> None:
         season_val_w = season_val_l = 0
 
         for game, feat in season_rows:
-            edge = feat.p_nrfi_model - feat.p_nrfi_market
-            if edge <= 0:
+            pred = predict_for_game(game.id, db)
+            if pred is None:
+                continue
+            edge = pred["edge"]
+            if edge is None or edge <= 0:
                 continue
             won = bool(feat.nrfi_label)
             season_all_w += int(won)
