@@ -43,6 +43,7 @@ services:
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       MODEL_ARTIFACT_PATH: ${MODEL_ARTIFACT_PATH:-models/nrfi_model.pkl}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: America/Los_Angeles
     volumes:
       - model_store:/app/models
     command: ["/bin/bash", "/app/scripts/start_cron.sh"]

@@ -7,7 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     cron \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+ENV TZ=America/Los_Angeles
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
