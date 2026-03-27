@@ -6,7 +6,7 @@ These rules apply when editing files under:
 
 - `backend/data/**/*`
 - `backend/modeling/**/*`
-- `scripts/backfill_history.py`
+- `scripts/backfill_*.py`
 - `scripts/bootstrap_db.py`
 - `backend/db/**/*` (for schema work that affects data/modeling)
 
@@ -20,7 +20,8 @@ Use:
   - `pybaseball.playerid_reverse_lookup()` for MLB ID → Fangraphs ID mapping
   - Fangraphs uses column `IDfg` (NOT `playerid`) for pitcher IDs
 - The Odds API v4 for market odds (`https://api.the-odds-api.com/v4/`)
-- MLB Stats API (`https://statsapi.mlb.com/api/v1/schedule`) for daily schedule + probable pitchers
+- MLB Stats API (`https://statsapi.mlb.com/api/v1/schedule`) for daily schedule, probable pitchers, umpire assignments
+- Open-Meteo archive API for historical weather data (free, no key required)
 
 Assume:
 - API keys via env vars: `ODDS_API_KEY`
@@ -52,8 +53,13 @@ All models are defined in `backend/db/models.py`.
 5. `Odds` (`odds` table)
    - `id`, `game_id` (FK), `source`, `market`, `home_ml`, `away_ml`
    - `total`, `total_over_odds`, `total_under_odds`, `fetched_at`
+   - No unique constraint — upsert logic in `fetch_odds.py` queries by `(game_id, source)` before inserting
 
-6. `NrfiFeatures` (`nrfi_features` table)
+6. `GameUmpire` (`game_umpires` table)
+   - `id`, `game_id` (FK, unique), `ump_id` (MLB person ID), `ump_name`
+   - Populated going forward by `run_daily.py` and historically by `backfill_umpire_assignments.py`
+
+7. `NrfiFeatures` (`nrfi_features` table)
    - `id`, `game_id` (FK, unique)
    - **Prior-season Fangraphs stats** (home and away SP):
      - `home_sp_era`, `home_sp_whip`, `home_sp_k_pct`, `home_sp_bb_pct`, `home_sp_hr9`
@@ -67,8 +73,13 @@ All models are defined in `backend/db/models.py`.
      - Same 5 columns for `away_sp_*`
    - **Team offense**:
      - `home_team_first_inn_runs_per_game`, `away_team_first_inn_runs_per_game`
-   - `park_factor` (currently 1.0 placeholder)
+   - **Park**: `park_factor` — computed from historical first-inning run rates (prior seasons only). Regressed toward 1.0 based on sample size (`min(1.0, games / 200)`).
+   - **Weather** (NULL for dome parks):
+     - `temperature_f`, `wind_speed_mph`, `wind_out_mph` (positive = blowing toward CF), `is_dome`
+   - **Umpire**: `ump_nrfi_rate_above_avg` — HP umpire's historical NRFI rate minus league avg, regressed toward 0
    - `nrfi_label` (bool), `p_nrfi_market` (float)
+
+   > **Important:** Weather and umpire columns are populated but are NOT yet in `FEATURE_COLS` in `train_model.py`. Do not assume the model uses them — check `FEATURE_COLS` before assuming any column is an active feature.
 
 When extending the schema, add columns via a migration script in `scripts/` using `sqlalchemy.text()` and `engine.begin()`. Do not use Alembic yet.
 
@@ -98,23 +109,71 @@ When extending the schema, add columns via a migration script in `scripts/` usin
 - `_TEAM_NAME_TO_ABBREV` — maps The Odds API full team names → Statcast abbreviations.
 - `estimate_p_nrfi_from_total(total)` — Poisson approximation: `λ = (total/18) × 0.74`, `P(NRFI) = e^(-2λ)`. Calibrated so total=8.5 → P(NRFI)≈0.50.
 - `_extract_best_markets()` — uses preferred bookmaker (DraftKings) but falls back to other bookmakers if totals are missing.
-- Game matching uses a **±1 day window** to handle UTC vs local date mismatches (e.g. Tokyo Series games).
+- Game matching uses `commenceTimeFrom: {date}T00:00:00Z` to `commenceTimeTo: {date+1}T12:00:00Z` — the upper bound extends to the next day at noon UTC to capture US West Coast games that start after midnight UTC. Do NOT change this back to `{date}T23:59:59Z`.
+- **Upsert logic**: queries for existing `Odds` row by `(game_id, source)` before inserting to prevent duplicate rows across pipeline re-runs.
+- **Total sanity check**: rejects totals outside 5.0–15.0 as likely alternate/half-game market lines leaking in from fallback bookmakers.
 
 ### `scripts/run_daily.py`
 Daily pipeline (runs at 9:03 AM via Docker cron scheduler):
-1. `fetch_schedule(target)` — MLB Stats API schedule + probable pitchers
-2. Insert `Game` + `GamePitchers` rows (idempotent)
+0. `post_results()` — post yesterday's results to Discord (non-fatal)
+1. `fetch_schedule(target)` — MLB Stats API schedule + probable pitchers + HP umpire
+2. Insert `Game`, `GamePitchers`, `GameUmpire` rows (idempotent)
 3. `build_features_for_season(season)` — builds NrfiFeatures for new games
 4. `fetch_and_store_odds(date_str)` — odds ingestion (non-fatal if fails)
+5. `post_predictions(target_date)` — Discord picks post (non-fatal)
 
 ### `scripts/start_cron.sh`
 - Dumps container env vars to `/etc/environment` so cron jobs can access `DATABASE_URL` etc.
-- Installs crontab: `3 9 * * *` → runs `run_daily.py`
+- Installs crontab:
+  - `3 9 * * *` → `run_daily.py` (morning pipeline)
+  - `0 12 * * *` → `refresh_odds.py` (noon odds refresh)
+  - `0 16 * * *` → `refresh_odds.py` (4 PM odds refresh)
+  - `0 2 * * *` → `backfill_game_results.py` (nightly results fill)
+
+### `scripts/refresh_odds.py`
+- Checks for games with `p_nrfi_market IS NULL` for today's date.
+- If any found: re-fetches odds, then posts a Discord update only for games that newly received lines.
+- No-op if all games already have odds.
+
+### `scripts/post_discord.py`
+- Posts today's picks as Discord embeds — one per game, sorted highest edge first.
+- Each embed shows: `Model X% · Mkt Y% · Edge +Z%` plus a plain-English recommendation.
+- Recommendation tiers: 🟢 Bet NRFI (≥+2%), 🟡 Lean NRFI (0–2%), 🟡 Lean YRFI (0 to -2%), 🔴 Fade NRFI (≤-2%).
+- `VALUE_PLAY_THRESHOLD` read from `VALUE_PLAY_THRESHOLD_PP` env var (default: 2 pp).
+
+### `scripts/post_results.py`
+- Posts yesterday's results and season-to-date record to Discord.
+- Only tracks games where the model had **positive edge** (edge > 0) as picks.
+- Two embeds: yesterday's game-by-game results + season W-L for all plays and value plays.
+
+### `scripts/entrypoint.sh`
+- Runs on backend container startup.
+- Step 1: `bootstrap_db.py` (idempotent table creation).
+- Step 2: If `games` table is empty, launches full backfill pipeline in the background:
+  - `backfill_history.py` → `build_features_for_season` → `backfill_game_parks.py` → `backfill_weather.py` → `backfill_park_factors.py` → `backfill_umpire_assignments.py` → `backfill_ump_features.py`
+- Step 3: Starts uvicorn immediately (API available before backfill finishes).
+- Logs to `/app/logs/backfill.log`.
+
+## Backfill Script Order (Fresh Deploy)
+
+When running backfills manually, order matters due to dependencies:
+
+```
+1. backfill_history.py               # games, pitchers, game_pitchers
+2. build_features_for_season (all)   # nrfi_features rows
+3. backfill_game_parks.py            # Game.park — needed by weather + park factors
+4. backfill_weather.py               # temperature/wind columns in nrfi_features
+5. backfill_park_factors.py          # park_factor in nrfi_features
+6. backfill_umpire_assignments.py    # game_umpires table
+7. backfill_ump_features.py          # ump_nrfi_rate_above_avg in nrfi_features
+```
+
+`entrypoint.sh` runs them in this order automatically on a fresh deploy.
 
 ## Modeling Rules
 
 ### Current feature set (23 features in `FEATURE_COLS`)
-See `backend/modeling/train_model.py` for the full list.
+See `backend/modeling/train_model.py` for the full list. Weather and umpire columns are in the DB but not yet in `FEATURE_COLS`.
 
 ### `train_model.py`
 - Trains **both** logistic regression (LR) and XGBoost (XGB), prints side-by-side metrics.
@@ -125,6 +184,10 @@ See `backend/modeling/train_model.py` for the full list.
   - `max_depth=3`, `min_child_weight=80`, `gamma=1.0`, `reg_alpha=0.5`, `reg_lambda=5.0`
 - Evaluates AUC, log loss, Brier score on all three splits.
 - Logs LR feature coefficients and XGB feature importances.
+
+### `model_classes.py`
+- Defines `XGBModel` and `CalibratedModel` used by the pickle. Must be importable at load time.
+- Do NOT move or rename these classes — pickle load will break.
 
 ### `model_store.py`
 - `save_model(model, path)` and `load_model(path)` via pickle.
@@ -142,6 +205,7 @@ See `backend/modeling/train_model.py` for the full list.
 - When computing rolling pitcher stats, use only starts with `game_date < target_game_date`.
 - When approximating market probabilities, only use odds that would have been known before game start.
 - Prior-season Fangraphs stats use `season - 1` to ensure no in-season leakage.
+- Park factors use only data from seasons prior to the target game's season.
 
 If there is any ambiguity, default to the safer "no leakage" choice.
 

@@ -16,4 +16,6 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "backend.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+RUN chmod +x /app/scripts/entrypoint.sh
+
+CMD ["/bin/bash", "/app/scripts/entrypoint.sh"]

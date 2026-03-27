@@ -9,8 +9,9 @@ Goals:
 - Build features for first-inning NRFI prediction
 - Train and serve a model that outputs NRFI probabilities and edges vs market odds
 - Expose a FastAPI backend that the frontend can call
+- Post daily picks and results to Discord
 
-**Current status:** Full backend is implemented and operational. Historical data backfill (2015–present), feature building, model training, odds ingestion, daily pipeline, and API endpoints are all working.
+**Current status:** Full backend is implemented and operational. Historical data backfill (2015–present), feature building, model training, odds ingestion, daily pipeline, Discord integration, and API endpoints are all working.
 
 ## Tech Stack
 
@@ -21,6 +22,8 @@ Goals:
 - Docker + docker-compose (`db`, `backend`, `scheduler` services)
 - `pybaseball` for Statcast + Fangraphs data
 - The Odds API v4 for moneylines and totals
+- Open-Meteo archive API for historical weather data
+- MLB Stats API for schedule, probable pitchers, umpire assignments
 - scikit-learn (logistic regression baseline)
 - XGBoost (primary model candidate)
 - `python-dotenv` for env var loading
@@ -32,7 +35,7 @@ Goals:
 - `backend/data/` — data ingestion and feature building
 - `backend/modeling/` — training, evaluation, prediction
 - `backend/api/` — FastAPI app and routers
-- `scripts/` — one-off and batch scripts (bootstrap, backfill, migrations, daily pipeline)
+- `scripts/` — one-off and batch scripts (bootstrap, backfill, migrations, daily pipeline, Discord)
 
 When adding new backend functionality, prefer placing it into one of these existing modules.
 
@@ -78,7 +81,7 @@ All phases below are done. New work should extend, not rebuild them.
 
 1. ✅ Python environment (`.venv`) and Docker/Postgres running locally
 2. ✅ Core config, DB session helpers
-3. ✅ SQLAlchemy models for all 6 tables
+3. ✅ SQLAlchemy models for all 7 tables (games, pitchers, game_pitchers, team_stats_daily, odds, game_umpires, nrfi_features)
 4. ✅ FastAPI with `/health`, `/games`, `/nrfi` endpoints
 5. ✅ Historical backfill (2015–present) via `pybaseball` Statcast
 6. ✅ `NrfiFeatures` table with 23 features + trained model
@@ -86,3 +89,16 @@ All phases below are done. New work should extend, not rebuild them.
 8. ✅ Daily pipeline (`run_daily.py`) with cron scheduler in Docker
 9. ✅ Within-season rolling pitcher stats (last 5 starts ERA/WHIP, first-inning ERA, velocity trend)
 10. ✅ XGBoost vs logistic regression comparison in `train_model.py`
+11. ✅ Discord integration — daily picks (`post_discord.py`), odds refresh (`refresh_odds.py`), results tracking (`post_results.py`)
+12. ✅ Weather features backfilled via Open-Meteo (`backfill_weather.py`)
+13. ✅ Umpire assignments + tendency features (`backfill_umpire_assignments.py`, `backfill_ump_features.py`)
+14. ✅ Real park factors computed from historical data (`backfill_park_factors.py`)
+15. ✅ Automated startup — `entrypoint.sh` bootstraps DB and runs full backfill pipeline on fresh deploy
+16. ✅ Nightly game results backfill (`backfill_game_results.py`) — fills first-inning outcomes after games finish
+
+## Known Gaps (not yet implemented)
+
+- Weather and umpire features are **collected and stored** but not yet added to `FEATURE_COLS` in `train_model.py` — model does not currently use them
+- No automated model retraining — must be triggered manually
+- CORS allows all origins (`*`) — tighten when frontend domain is known
+- No historical odds — `p_nrfi_market` only populated for current-season games going forward
