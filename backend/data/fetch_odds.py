@@ -239,21 +239,31 @@ def fetch_and_store_odds(date_str: str | None = None, db: Session | None = None)
                 )
                 continue
 
-            # Use ±1 day window to handle UTC vs local date mismatches
-            # (e.g. Tokyo Series games cross midnight UTC relative to US game date)
+            # Prefer exact date match; fall back to ±1 day only for UTC edge
+            # cases like the Tokyo Series where game date crosses midnight UTC.
             target_date = date.fromisoformat(target)
             game = (
                 db.query(Game)
                 .filter(
-                    Game.game_date.between(
-                        target_date - timedelta(days=1),
-                        target_date + timedelta(days=1),
-                    ),
+                    Game.game_date == target_date,
                     Game.home_team == home_abbrev,
                     Game.away_team == away_abbrev,
                 )
                 .first()
             )
+            if game is None:
+                game = (
+                    db.query(Game)
+                    .filter(
+                        Game.game_date.between(
+                            target_date - timedelta(days=1),
+                            target_date + timedelta(days=1),
+                        ),
+                        Game.home_team == home_abbrev,
+                        Game.away_team == away_abbrev,
+                    )
+                    .first()
+                )
             if game is None:
                 logger.debug(
                     "No DB game found for %s @ %s on %s — skipping.",
