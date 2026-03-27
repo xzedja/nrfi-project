@@ -60,6 +60,7 @@ _TEAM_NAME_TO_ABBREV: dict[str, str] = {
     "Minnesota Twins": "MIN",
     "New York Mets": "NYM",
     "New York Yankees": "NYY",
+    "Athletics": "ATH",
     "Oakland Athletics": "ATH",
     "Sacramento Athletics": "ATH",
     "Philadelphia Phillies": "PHI",
@@ -276,6 +277,11 @@ def fetch_and_store_odds(date_str: str | None = None, db: Session | None = None)
             # fallback bookmakers (e.g. 3.5 = first-5 total, 11.5 = alt line).
             # MLB full-game totals are always in the 5–15 range.
             raw_total = markets["total"]
+            logger.info(
+                "  %s @ %s — total=%s home_ml=%s away_ml=%s",
+                away_abbrev, home_abbrev, raw_total,
+                markets.get("home_ml"), markets.get("away_ml"),
+            )
             if raw_total is not None and not (5.0 <= raw_total <= 15.0):
                 logger.warning(
                     "Skipping implausible total %.1f for %s @ %s — likely alternate market.",
