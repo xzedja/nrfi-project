@@ -29,7 +29,7 @@ sys.path.insert(0, ".")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-from backend.db.models import Game, GamePitchers, NrfiFeatures
+from backend.db.models import Game, GamePitchers, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
 from backend.modeling.predict import predict_for_game
 
@@ -71,6 +71,12 @@ def _recommendation(edge: float, model: float) -> str:
         return f"🔴 **Fade NRFI** — market overvalues NRFI by {edge_pct}"
 
 
+def _fmt_odds(o: int | None) -> str:
+    if o is None:
+        return "N/A"
+    return f"+{o}" if o > 0 else str(o)
+
+
 def _build_game_embed(pred: dict[str, Any]) -> dict:
     """Build a single Discord embed dict for one game prediction."""
     away = pred["away_team"]
@@ -80,21 +86,24 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     market = pred.get("p_nrfi_market")
     away_sp = pred.get("away_sp_name")
     home_sp = pred.get("home_sp_name")
+    nrfi_odds = pred.get("first_inn_under_odds")
+    yrfi_odds = pred.get("first_inn_over_odds")
 
-    pitchers_line = (
-        f"{away_sp} vs {home_sp}\n"
-        if away_sp and home_sp
-        else ""
-    )
+    pitchers_line = f"{away_sp} vs {home_sp}\n" if away_sp and home_sp else ""
+
+    if nrfi_odds is not None or yrfi_odds is not None:
+        odds_line = f"NRFI {_fmt_odds(nrfi_odds)} · YRFI {_fmt_odds(yrfi_odds)}\n"
+    else:
+        odds_line = ""
 
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
         data_line = f"Model {model * 100:.0f}% · Mkt {market * 100:.0f}% · Edge {sign}{edge * 100:.0f}%"
-        description = f"{pitchers_line}{data_line}\n{_recommendation(edge, model)}"
+        description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge, model)}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"
         description = (
-            f"{pitchers_line}Model {nrfi_pct} · Mkt N/A\n"
+            f"{pitchers_line}{odds_line}Model {nrfi_pct} · Mkt N/A\n"
             f"⚪ No lines yet — model gives NRFI {nrfi_pct}"
         )
     else:
@@ -158,11 +167,22 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
                     "home_sp_name": gp.home_sp.name if gp.home_sp else None,
                 }
 
+        # Build first-inning odds lookup: game_id → {first_inn_over_odds, first_inn_under_odds}
+        first_inn_odds: dict[int, dict[str, int | None]] = {}
+        for game in games:
+            odds_row = db.query(Odds).filter_by(game_id=game.id).first()
+            if odds_row is not None:
+                first_inn_odds[game.id] = {
+                    "first_inn_over_odds": odds_row.first_inn_over_odds,
+                    "first_inn_under_odds": odds_row.first_inn_under_odds,
+                }
+
         preds = []
         for game in games:
             pred = predict_for_game(game.id, db)
             if pred is not None:
                 pred.update(pitcher_names.get(game.id, {}))
+                pred.update(first_inn_odds.get(game.id, {}))
                 preds.append(pred)
 
         if not preds:

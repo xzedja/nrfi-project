@@ -98,6 +98,8 @@ class Odds(Base):
     total = Column(Float, nullable=True)
     total_over_odds = Column(Integer, nullable=True)
     total_under_odds = Column(Integer, nullable=True)
+    first_inn_over_odds = Column(Integer, nullable=True)   # YRFI (Over 0.5)
+    first_inn_under_odds = Column(Integer, nullable=True)  # NRFI (Under 0.5)
     fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     game = relationship("Game", back_populates="odds")
