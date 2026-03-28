@@ -78,18 +78,22 @@ def _fmt_odds(o: int | None) -> str:
     return f"+{o}" if o > 0 else str(o)
 
 
-_PT = ZoneInfo("America/Los_Angeles")
+_TZ_ET = ZoneInfo("America/New_York")
+_TZ_CT = ZoneInfo("America/Chicago")
+_TZ_PT = ZoneInfo("America/Los_Angeles")
 
 
 def _fmt_game_time(game_time_utc: str | None) -> str | None:
-    """Convert ISO UTC game time string to 'H:MM AM/PM PT' format."""
+    """Convert ISO UTC game time string to 'H:MM ET / H:MM CT / H:MM PT' format."""
     if not game_time_utc:
         return None
     try:
         from datetime import datetime
         dt = datetime.fromisoformat(game_time_utc.replace("Z", "+00:00"))
-        dt_pt = dt.astimezone(_PT)
-        return dt_pt.strftime("%-I:%M %p PT")
+        et = dt.astimezone(_TZ_ET).strftime("%-I:%M ET")
+        ct = dt.astimezone(_TZ_CT).strftime("%-I:%M CT")
+        pt = dt.astimezone(_TZ_PT).strftime("%-I:%M PT")
+        return f"{et} / {ct} / {pt}"
     except Exception:
         return None
 
