@@ -41,45 +41,53 @@ home = event["home_team"]
 away = event["away_team"]
 print(f"Checking all markets for: {away} @ {home}\n")
 
-# Step 2: Try inning-specific markets on the regular odds endpoint
-# (event-specific endpoint may require a higher tier)
+# Step 2: Try inning-specific markets, both with regions=us and bookmakers=fanduel
 from datetime import date, timedelta
 
 target = str(date.today())
+time_params = {
+    "apiKey": settings.odds_api_key,
+    "oddsFormat": "american",
+    "dateFormat": "iso",
+    "commenceTimeFrom": f"{target}T00:00:00Z",
+    "commenceTimeTo": f"{(date.fromisoformat(target) + timedelta(days=1)).isoformat()}T12:00:00Z",
+}
+
 MARKETS_TO_PROBE = [
+    "h2h_1st_1_innings",
     "h2h_1st_5_innings",
-    "team_totals",
-    "alternate_totals",
+    "totals_1st_1_innings",
+    "totals_1st_3_innings",
+    "totals_1st_5_innings",
+    "spreads_1st_1_innings",
     "nrfi",
     "yrfi",
-    "h2h_1st_1_innings",
-    "totals_1st_1_innings",
+    "team_totals",
+    "alternate_totals",
 ]
 
+print(f"{'Market':<35}  {'regions=us':<20}  bookmakers=fanduel")
+print("-" * 80)
+
 for market in MARKETS_TO_PROBE:
-    resp2 = requests.get(
-        "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
-        params={
-            "apiKey": settings.odds_api_key,
-            "regions": "us",
-            "markets": market,
-            "oddsFormat": "american",
-            "dateFormat": "iso",
-            "commenceTimeFrom": f"{target}T00:00:00Z",
-            "commenceTimeTo": f"{(date.fromisoformat(target) + timedelta(days=1)).isoformat()}T12:00:00Z",
-        },
-        timeout=10,
-    )
-    remaining = resp2.headers.get("x-requests-remaining", "?")
-    if resp2.status_code == 422:
-        print(f"  {market:35s} — 422 (not supported on this tier)")
-    elif resp2.status_code != 200:
-        print(f"  {market:35s} — {resp2.status_code}")
-    else:
-        games = resp2.json()
-        has_data = any(
-            any(m["key"] == market for bm in g.get("bookmakers", []) for m in bm.get("markets", []))
-            for g in games
+    results = []
+    for label, extra in [("regions=us", {"regions": "us"}), ("bookmakers=fanduel", {"bookmakers": "fanduel"})]:
+        r = requests.get(
+            "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
+            params={**time_params, "markets": market, **extra},
+            timeout=10,
         )
-        print(f"  {market:35s} — OK ({remaining} requests left, data={'YES' if has_data else 'no'})")
+        if r.status_code == 422:
+            results.append("422")
+        elif r.status_code != 200:
+            results.append(str(r.status_code))
+        else:
+            games = r.json()
+            has_data = any(
+                any(m["key"] == market for bm in g.get("bookmakers", []) for m in bm.get("markets", []))
+                for g in games
+            )
+            results.append(f"OK ({'data' if has_data else 'empty'})")
+
+    print(f"  {market:<35}  {results[0]:<20}  {results[1]}")
 
