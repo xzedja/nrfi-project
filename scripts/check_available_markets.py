@@ -82,28 +82,32 @@ MARKETS_TO_PROBE = [
     "alternate_totals",
 ]
 
-print(f"{'Market':<35}  {'regions=us':<20}  bookmakers=fanduel")
-print("-" * 80)
+import time
+print("Fetching totals_1st_1_innings (waiting 5s to avoid rate limit)...")
+time.sleep(5)
 
-for market in MARKETS_TO_PROBE:
-    results = []
-    for label, extra in [("regions=us", {"regions": "us"}), ("bookmakers=fanduel", {"bookmakers": "fanduel"})]:
-        r = requests.get(
-            "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
-            params={**time_params, "markets": market, **extra},
-            timeout=10,
-        )
-        if r.status_code == 422:
-            results.append("422")
-        elif r.status_code != 200:
-            results.append(str(r.status_code))
-        else:
-            games = r.json()
-            has_data = any(
-                any(m["key"] == market for bm in g.get("bookmakers", []) for m in bm.get("markets", []))
-                for g in games
-            )
-            results.append(f"OK ({'data' if has_data else 'empty'})")
+r = requests.get(
+    "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
+    params={**time_params, "markets": "totals_1st_1_innings", "regions": "us"},
+    timeout=10,
+)
+print(f"Status: {r.status_code}  |  Requests remaining: {r.headers.get('x-requests-remaining')}\n")
 
-    print(f"  {market:<35}  {results[0]:<20}  {results[1]}")
+if r.status_code != 200:
+    print(f"Error: {r.text}")
+    sys.exit(1)
+
+games = r.json()
+print(f"{len(games)} game(s) returned\n")
+
+for game in games:
+    home = game["home_team"]
+    away = game["away_team"]
+    print(f"{away} @ {home}")
+    for bm in game.get("bookmakers", []):
+        for market in bm.get("markets", []):
+            if market["key"] == "totals_1st_1_innings":
+                for outcome in market["outcomes"]:
+                    print(f"  {bm['title']:20s}  {outcome['name']:6s}  {outcome.get('point')}  {outcome['price']}")
+    print()
 
