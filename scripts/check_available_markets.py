@@ -83,35 +83,45 @@ MARKETS_TO_PROBE = [
 ]
 
 import time
-print("Fetching totals_1st_1_innings (waiting 3s to avoid rate limit)...")
-time.sleep(3)
 
-r = requests.get(
+MARKET = "totals_1st_1_innings"
+
+# Try 1: general /odds/ endpoint
+print(f"Trying general /odds/ endpoint with {MARKET}...")
+r1 = requests.get(
     "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
-    params={**time_params, "markets": "totals_1st_1_innings", "regions": "us"},
+    params={**time_params, "markets": MARKET, "regions": "us"},
     timeout=10,
 )
-print(f"Status: {r.status_code}  |  Requests remaining: {r.headers.get('x-requests-remaining')}\n")
+print(f"  Status: {r1.status_code}  |  Remaining: {r1.headers.get('x-requests-remaining')}")
+if r1.status_code != 200:
+    print(f"  Error: {r1.json().get('message')}\n")
+else:
+    print(f"  OK — {len(r1.json())} games\n")
 
-if r.status_code != 200:
-    print(f"Error: {r.text}")
-    sys.exit(1)
+time.sleep(2)
 
-games = r.json()
-print(f"{len(games)} game(s) returned\n")
-
-for game in games:
-    home = game["home_team"]
-    away = game["away_team"]
-    print(f"{away} @ {home}")
-    found_any = False
-    for bm in game.get("bookmakers", []):
+# Try 2: event-specific endpoint
+print(f"Trying event-specific endpoint with {MARKET}...")
+r2 = requests.get(
+    f"https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds",
+    params={
+        "apiKey": settings.odds_api_key,
+        "regions": "us",
+        "markets": MARKET,
+        "oddsFormat": "american",
+    },
+    timeout=10,
+)
+print(f"  Status: {r2.status_code}  |  Remaining: {r2.headers.get('x-requests-remaining')}")
+if r2.status_code != 200:
+    print(f"  Error: {r2.json().get('message')}\n")
+else:
+    data = r2.json()
+    print(f"\n{data.get('away_team')} @ {data.get('home_team')}")
+    for bm in data.get("bookmakers", []):
         for market in bm.get("markets", []):
-            if market["key"] == "totals_1st_1_innings":
-                found_any = True
+            if market["key"] == MARKET:
                 for outcome in market["outcomes"]:
                     print(f"  {bm['title']:25s}  {outcome['name']:6s}  point={outcome.get('point')}  odds={outcome['price']}")
-    if not found_any:
-        print("  (no totals_1st_1_innings data for this game)")
-    print()
 
