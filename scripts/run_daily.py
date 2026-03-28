@@ -88,6 +88,8 @@ def run_daily(target_date: str | None = None) -> None:
         for g in games:
             existing = db.query(Game).filter_by(external_id=g["game_pk"]).first()
             if existing is not None:
+                if existing.game_time is None and g.get("game_time"):
+                    existing.game_time = g["game_time"]
                 skipped += 1
                 continue
 
