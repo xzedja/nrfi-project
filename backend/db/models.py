@@ -34,6 +34,7 @@ class Game(Base):
     id = Column(Integer, primary_key=True)
     external_id = Column(Integer, unique=True, nullable=True, index=True)  # MLB game_pk
     game_date = Column(Date, nullable=False, index=True)
+    game_time = Column(String(30), nullable=True)  # ISO UTC datetime string, e.g. "2026-04-01T23:10:00Z"
     home_team = Column(String(10), nullable=False)
     away_team = Column(String(10), nullable=False)
     inning_1_home_runs = Column(Integer, nullable=True)
@@ -164,6 +165,10 @@ class NrfiFeatures(Base):
     away_sp_first_inn_era = Column(Float, nullable=True)
     away_sp_avg_velo = Column(Float, nullable=True)
     away_sp_velo_trend = Column(Float, nullable=True)
+
+    # Pitcher rest (days since last start, None if first start of season)
+    home_sp_days_rest = Column(Float, nullable=True)
+    away_sp_days_rest = Column(Float, nullable=True)
 
     # Target and market probability
     nrfi_label = Column(Boolean, nullable=True)

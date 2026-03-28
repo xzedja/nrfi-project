@@ -75,11 +75,13 @@ FEATURE_COLS = [
     "home_sp_first_inn_era",
     "home_sp_avg_velo",
     "home_sp_velo_trend",
+    "home_sp_days_rest",
     "away_sp_last5_era",
     "away_sp_last5_whip",
     "away_sp_first_inn_era",
     "away_sp_avg_velo",
     "away_sp_velo_trend",
+    "away_sp_days_rest",
     # Team and park
     "home_team_first_inn_runs_per_game",
     "away_team_first_inn_runs_per_game",

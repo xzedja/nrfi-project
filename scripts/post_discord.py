@@ -21,6 +21,7 @@ import os
 import sys
 from datetime import date
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -77,6 +78,22 @@ def _fmt_odds(o: int | None) -> str:
     return f"+{o}" if o > 0 else str(o)
 
 
+_PT = ZoneInfo("America/Los_Angeles")
+
+
+def _fmt_game_time(game_time_utc: str | None) -> str | None:
+    """Convert ISO UTC game time string to 'H:MM AM/PM PT' format."""
+    if not game_time_utc:
+        return None
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(game_time_utc.replace("Z", "+00:00"))
+        dt_pt = dt.astimezone(_PT)
+        return dt_pt.strftime("%-I:%M %p PT")
+    except Exception:
+        return None
+
+
 def _build_game_embed(pred: dict[str, Any]) -> dict:
     """Build a single Discord embed dict for one game prediction."""
     away = pred["away_team"]
@@ -88,6 +105,11 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     home_sp = pred.get("home_sp_name")
     nrfi_odds = pred.get("first_inn_under_odds")
     yrfi_odds = pred.get("first_inn_over_odds")
+    game_time_str = _fmt_game_time(pred.get("game_time"))
+
+    title = f"{away} @ {home}"
+    if game_time_str:
+        title += f"  ·  {game_time_str}"
 
     pitchers_line = f"{away_sp} vs {home_sp}\n" if away_sp and home_sp else ""
 
@@ -110,7 +132,7 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
         description = "No prediction available."
 
     return {
-        "title": f"{away} @ {home}",
+        "title": title,
         "description": description,
         "color": _edge_color(edge),
     }
@@ -183,6 +205,7 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
             if pred is not None:
                 pred.update(pitcher_names.get(game.id, {}))
                 pred.update(first_inn_odds.get(game.id, {}))
+                pred["game_time"] = game.game_time
                 preds.append(pred)
 
         if not preds:

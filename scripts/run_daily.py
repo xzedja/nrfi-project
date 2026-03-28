@@ -94,6 +94,7 @@ def run_daily(target_date: str | None = None) -> None:
             game = Game(
                 external_id=g["game_pk"],
                 game_date=date.fromisoformat(g["game_date"]),
+                game_time=g.get("game_time"),
                 home_team=g["home_team"],
                 away_team=g["away_team"],
                 park=g.get("venue_name"),

@@ -278,8 +278,9 @@ def _pitcher_rolling_features(
         first_inn_era   : first-inning ERA proxy (first_inn_runs/start * 9, season-to-date)
         avg_velo        : mean fastball velocity over last n starts
         velo_trend      : last-start avg velo minus n-start avg (negative = declining)
+        days_rest       : days since most recent prior start (None if first start of season)
     """
-    _null = {k: None for k in ("last5_era", "last5_whip", "first_inn_era", "avg_velo", "velo_trend")}
+    _null = {k: None for k in ("last5_era", "last5_whip", "first_inn_era", "avg_velo", "velo_trend", "days_rest")}
 
     if starts_df is None or starts_df.empty:
         return _null
@@ -316,12 +317,23 @@ def _pitcher_rolling_features(
         if pd.notna(last_velo):
             velo_trend = round(float(last_velo) - avg_velo, 2)
 
+    # Days rest: days between most recent prior start and target game date
+    days_rest: float | None = None
+    last_start_date = prior.iloc[-1]["game_date"]
+    try:
+        from datetime import date as _date
+        delta = _date.fromisoformat(before_date) - _date.fromisoformat(last_start_date)
+        days_rest = float(delta.days)
+    except Exception:
+        pass
+
     return {
         "last5_era": last5_era,
         "last5_whip": last5_whip,
         "first_inn_era": fi_era,
         "avg_velo": avg_velo,
         "velo_trend": velo_trend,
+        "days_rest": days_rest,
     }
 
 
@@ -655,12 +667,14 @@ def build_features_for_season(season: int) -> None:
                 home_sp_first_inn_era=h_roll["first_inn_era"],
                 home_sp_avg_velo=h_roll["avg_velo"],
                 home_sp_velo_trend=h_roll["velo_trend"],
+                home_sp_days_rest=h_roll["days_rest"],
 
                 away_sp_last5_era=a_roll["last5_era"],
                 away_sp_last5_whip=a_roll["last5_whip"],
                 away_sp_first_inn_era=a_roll["first_inn_era"],
                 away_sp_avg_velo=a_roll["avg_velo"],
                 away_sp_velo_trend=a_roll["velo_trend"],
+                away_sp_days_rest=a_roll["days_rest"],
 
                 # Team offense features
                 home_team_first_inn_runs_per_game=ht.get("first_inn_runs_scored_per_game"),
