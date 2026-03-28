@@ -41,46 +41,45 @@ home = event["home_team"]
 away = event["away_team"]
 print(f"Checking all markets for: {away} @ {home}\n")
 
-# Step 2: Probe a broad list of market keys to see which ones the API accepts
-MARKETS_TO_CHECK = [
-    "h2h",
-    "spreads",
-    "totals",
+# Step 2: Try inning-specific markets on the regular odds endpoint
+# (event-specific endpoint may require a higher tier)
+from datetime import date, timedelta
+
+target = str(date.today())
+MARKETS_TO_PROBE = [
     "h2h_1st_5_innings",
     "team_totals",
     "alternate_totals",
-    "alternate_spreads",
     "nrfi",
     "yrfi",
     "h2h_1st_1_innings",
-    "team_totals_1st_1_innings",
     "totals_1st_1_innings",
-    "run_line",
-    "pitcher_strikeouts",
-    "batter_home_runs",
 ]
 
-print(f"Probing {len(MARKETS_TO_CHECK)} market keys...\n")
+for market in MARKETS_TO_PROBE:
+    resp2 = requests.get(
+        "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
+        params={
+            "apiKey": settings.odds_api_key,
+            "regions": "us",
+            "markets": market,
+            "oddsFormat": "american",
+            "dateFormat": "iso",
+            "commenceTimeFrom": f"{target}T00:00:00Z",
+            "commenceTimeTo": f"{(date.fromisoformat(target) + timedelta(days=1)).isoformat()}T12:00:00Z",
+        },
+        timeout=10,
+    )
+    remaining = resp2.headers.get("x-requests-remaining", "?")
+    if resp2.status_code == 422:
+        print(f"  {market:35s} — 422 (not supported on this tier)")
+    elif resp2.status_code != 200:
+        print(f"  {market:35s} — {resp2.status_code}")
+    else:
+        games = resp2.json()
+        has_data = any(
+            any(m["key"] == market for bm in g.get("bookmakers", []) for m in bm.get("markets", []))
+            for g in games
+        )
+        print(f"  {market:35s} — OK ({remaining} requests left, data={'YES' if has_data else 'no'})")
 
-resp2 = requests.get(
-    f"https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds",
-    params={
-        "apiKey": settings.odds_api_key,
-        "regions": "us",
-        "markets": ",".join(MARKETS_TO_CHECK),
-        "oddsFormat": "american",
-    },
-    timeout=10,
-)
-resp2.raise_for_status()
-print(f"Requests remaining after: {resp2.headers.get('x-requests-remaining')}\n")
-
-data = resp2.json()
-bookmakers = data.get("bookmakers", [])
-if not bookmakers:
-    print("No bookmakers returned.")
-    sys.exit(0)
-
-for bm in bookmakers:
-    market_keys = [m["key"] for m in bm.get("markets", [])]
-    print(f"{bm['title']:25s}  {market_keys}")
