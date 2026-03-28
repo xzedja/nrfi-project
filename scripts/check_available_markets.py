@@ -35,11 +35,27 @@ if not events:
     print("No events found for today.")
     sys.exit(0)
 
-event = events[0]
+from datetime import timezone
+import datetime as dt
+
+now = dt.datetime.now(timezone.utc)
+
+# Pick the first game that hasn't started yet
+future_events = [
+    e for e in events
+    if dt.datetime.fromisoformat(e["commence_time"].replace("Z", "+00:00")) > now
+]
+
+if not future_events:
+    print("No upcoming games found — all today's games may have already started.")
+    sys.exit(0)
+
+event = future_events[0]
 event_id = event["id"]
 home = event["home_team"]
 away = event["away_team"]
-print(f"Checking all markets for: {away} @ {home}\n")
+commence = event["commence_time"]
+print(f"Checking markets for: {away} @ {home}  (starts {commence})\n")
 
 # Step 2: Try inning-specific markets, both with regions=us and bookmakers=fanduel
 from datetime import date, timedelta
