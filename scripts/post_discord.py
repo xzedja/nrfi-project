@@ -161,7 +161,7 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
 
     logo_url = _team_logo_url(home)
     if logo_url:
-        embed["thumbnail"] = {"url": logo_url}
+        embed["author"] = {"name": "MLB", "icon_url": logo_url}
 
     return embed
 
