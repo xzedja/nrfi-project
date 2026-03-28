@@ -83,8 +83,8 @@ MARKETS_TO_PROBE = [
 ]
 
 import time
-print("Fetching totals_1st_1_innings (waiting 5s to avoid rate limit)...")
-time.sleep(5)
+print("Fetching totals_1st_1_innings (waiting 3s to avoid rate limit)...")
+time.sleep(3)
 
 r = requests.get(
     "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/",
@@ -104,10 +104,14 @@ for game in games:
     home = game["home_team"]
     away = game["away_team"]
     print(f"{away} @ {home}")
+    found_any = False
     for bm in game.get("bookmakers", []):
         for market in bm.get("markets", []):
             if market["key"] == "totals_1st_1_innings":
+                found_any = True
                 for outcome in market["outcomes"]:
-                    print(f"  {bm['title']:20s}  {outcome['name']:6s}  {outcome.get('point')}  {outcome['price']}")
+                    print(f"  {bm['title']:25s}  {outcome['name']:6s}  point={outcome.get('point')}  odds={outcome['price']}")
+    if not found_any:
+        print("  (no totals_1st_1_innings data for this game)")
     print()
 
