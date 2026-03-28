@@ -41,13 +41,33 @@ home = event["home_team"]
 away = event["away_team"]
 print(f"Checking all markets for: {away} @ {home}\n")
 
-# Step 2: Fetch all available markets for that event
+# Step 2: Probe a broad list of market keys to see which ones the API accepts
+MARKETS_TO_CHECK = [
+    "h2h",
+    "spreads",
+    "totals",
+    "h2h_1st_5_innings",
+    "team_totals",
+    "alternate_totals",
+    "alternate_spreads",
+    "nrfi",
+    "yrfi",
+    "h2h_1st_1_innings",
+    "team_totals_1st_1_innings",
+    "totals_1st_1_innings",
+    "run_line",
+    "pitcher_strikeouts",
+    "batter_home_runs",
+]
+
+print(f"Probing {len(MARKETS_TO_CHECK)} market keys...\n")
+
 resp2 = requests.get(
     f"https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds",
     params={
         "apiKey": settings.odds_api_key,
         "regions": "us",
-        "markets": "all",
+        "markets": ",".join(MARKETS_TO_CHECK),
         "oddsFormat": "american",
     },
     timeout=10,
