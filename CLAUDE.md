@@ -84,10 +84,10 @@ All phases below are done. New work should extend, not rebuild them.
 3. ✅ SQLAlchemy models for all 7 tables (games, pitchers, game_pitchers, team_stats_daily, odds, game_umpires, nrfi_features)
 4. ✅ FastAPI with `/health`, `/games`, `/nrfi` endpoints
 5. ✅ Historical backfill (2015–present) via `pybaseball` Statcast
-6. ✅ `NrfiFeatures` table with 23 features + trained model
-7. ✅ Odds ingestion from The Odds API with P(NRFI) approximation
+6. ✅ `NrfiFeatures` table with 30 features + trained model
+7. ✅ Odds ingestion from The Odds API — moneylines, game totals, and first-inning NRFI/YRFI lines via event-specific endpoint
 8. ✅ Daily pipeline (`run_daily.py`) with cron scheduler in Docker
-9. ✅ Within-season rolling pitcher stats (last 5 starts ERA/WHIP, first-inning ERA, velocity trend)
+9. ✅ Within-season rolling pitcher stats (last 5 starts ERA/WHIP, first-inning ERA, velocity trend, days rest)
 10. ✅ XGBoost vs logistic regression comparison in `train_model.py`
 11. ✅ Discord integration — daily picks (`post_discord.py`), odds refresh (`refresh_odds.py`), results tracking (`post_results.py`)
 12. ✅ Weather features backfilled via Open-Meteo (`backfill_weather.py`)
@@ -95,10 +95,15 @@ All phases below are done. New work should extend, not rebuild them.
 14. ✅ Real park factors computed from historical data (`backfill_park_factors.py`)
 15. ✅ Automated startup — `entrypoint.sh` bootstraps DB and runs full backfill pipeline on fresh deploy
 16. ✅ Nightly game results backfill (`backfill_game_results.py`) — fills first-inning outcomes after games finish
+17. ✅ Actual NRFI market odds from The Odds API `totals_1st_1_innings` market (event-specific endpoint); vig-removed implied probability used for `p_nrfi_market`; Poisson approximation as fallback
+18. ✅ `p_nrfi_model` stored in `nrfi_features` at pipeline run time for result tracking
+19. ✅ Docker container timezone fixed to `America/Los_Angeles` — cron runs at correct local time
+20. ✅ Discord picks show pitcher names, NRFI/YRFI odds, game times in ET/CT/PT, and color-coded edge tiers
+21. ✅ Pitcher rest days (`home_sp_days_rest`, `away_sp_days_rest`) as model feature; backfilled via `backfill_pitcher_rest.py`
+22. ✅ `game_time` stored on `Game` rows and displayed in Discord embeds
 
 ## Known Gaps (not yet implemented)
 
-- Weather and umpire features are **collected and stored** but not yet added to `FEATURE_COLS` in `train_model.py` — model does not currently use them
-- No automated model retraining — must be triggered manually
+- No automated model retraining — must be triggered manually (`python -m backend.modeling.train_model`)
 - CORS allows all origins (`*`) — tighten when frontend domain is known
-- No historical odds — `p_nrfi_market` only populated for current-season games going forward
+- No historical NRFI odds — `p_nrfi_market` only populated for current-season games going forward (historical API coverage too sparse)

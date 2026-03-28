@@ -41,6 +41,24 @@ _COLOR_RED    = 0xE74C3C   # negative edge
 _COLOR_GRAY   = 0x95A5A6   # no market data
 _COLOR_BLUE   = 0x3498DB   # header
 
+# ESPN public CDN for MLB team logos (no API key required)
+_ESPN_LOGO_BASE = "https://a.espncdn.com/i/teamlogos/mlb/500"
+_TEAM_ESPN_SLUG: dict[str, str] = {
+    "ARI": "ari", "ATL": "atl", "BAL": "bal", "BOS": "bos",
+    "CHC": "chc", "CWS": "chw", "CIN": "cin", "CLE": "cle",
+    "COL": "col", "DET": "det", "HOU": "hou", "KC":  "kc",
+    "LAA": "laa", "LAD": "lad", "MIA": "mia", "MIL": "mil",
+    "MIN": "min", "NYM": "nym", "NYY": "nyy", "ATH": "ath",
+    "PHI": "phi", "PIT": "pit", "SD":  "sd",  "SEA": "sea",
+    "SF":  "sf",  "STL": "stl", "TB":  "tb",  "TEX": "tex",
+    "TOR": "tor", "WSH": "wsh",
+}
+
+
+def _team_logo_url(abbrev: str) -> str | None:
+    slug = _TEAM_ESPN_SLUG.get(abbrev)
+    return f"{_ESPN_LOGO_BASE}/{slug}.png" if slug else None
+
 # Webhook payload limit: 10 embeds per request
 _MAX_EMBEDS_PER_REQUEST = 10
 
@@ -135,11 +153,17 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     else:
         description = "No prediction available."
 
-    return {
+    embed: dict[str, Any] = {
         "title": title,
         "description": description,
         "color": _edge_color(edge),
     }
+
+    logo_url = _team_logo_url(home)
+    if logo_url:
+        embed["thumbnail"] = {"url": logo_url}
+
+    return embed
 
 
 def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
