@@ -47,17 +47,13 @@ headers = {
 
 print(f"Registering {len(COMMANDS)} global command(s) for app {settings.discord_app_id}...")
 
-for cmd in COMMANDS:
-    resp = requests.put(
-        f"{url}/{cmd['name']}",
-        headers=headers,
-        json=cmd,
-        timeout=10,
-    )
-    if resp.status_code in (200, 201):
-        print(f"  ✓ /{cmd['name']} registered successfully.")
-    else:
-        print(f"  ✗ /{cmd['name']} failed: {resp.status_code} — {resp.text}")
+# PUT to the base URL does a bulk overwrite — replaces all global commands at once
+resp = requests.put(url, headers=headers, json=COMMANDS, timeout=10)
+if resp.status_code in (200, 201):
+    for cmd in resp.json():
+        print(f"  ✓ /{cmd['name']} registered (id={cmd['id']}).")
+else:
+    print(f"  ✗ Registration failed: {resp.status_code} — {resp.text}")
 
 print("\nDone. Global commands can take up to 1 hour to propagate to all servers.")
 print("For instant testing, register guild commands instead (pass ?guild_id=YOUR_SERVER_ID).")
