@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 from backend.db.models import Game, GamePitchers, NrfiFeatures, Odds, Pitcher
 from backend.db.session import SessionLocal
 from backend.modeling.predict import predict_for_game
-from scripts.backfill_game_results import _fetch_linescore_map
+from scripts.backfill_game_results import _fetch_linescore_map as _fetch_final_linescore_map
 
 # ---------------------------------------------------------------------------
 # Config
@@ -173,15 +173,46 @@ def _build_pick_embed(pred: dict[str, Any]) -> dict:
     return embed
 
 
+def _fetch_first_inning_live(date_str: str) -> dict[int, dict]:
+    """
+    Fetch first-inning run totals for all games on date_str regardless of
+    game state (in-progress, final, etc.). Returns {game_pk: {"home": int, "away": int}}
+    only for games where inning 1 data exists.
+    """
+    import requests
+    url = (
+        f"https://statsapi.mlb.com/api/v1/schedule"
+        f"?sportId=1&date={date_str}&hydrate=linescore"
+    )
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return {}
+
+    result: dict[int, dict] = {}
+    for date_block in data.get("dates", []):
+        for game in date_block.get("games", []):
+            game_pk = game.get("gamePk")
+            innings = game.get("linescore", {}).get("innings", [])
+            if not innings:
+                continue
+            first_inn = innings[0]
+            home_runs = first_inn.get("home", {}).get("runs")
+            away_runs = first_inn.get("away", {}).get("runs")
+            if home_runs is not None and away_runs is not None:
+                result[int(game_pk)] = {"home": int(home_runs), "away": int(away_runs)}
+    return result
+
+
 def _build_record_embed(target_date: str) -> dict[str, Any]:
     db = SessionLocal()
     try:
         games = db.query(Game).filter(Game.game_date == target_date).all()
 
-        # Fetch live first-inning results from MLB API for any game not yet in DB
-        live_scores: dict[int, dict] = {}
-        if any(g.nrfi is None and g.external_id for g in games):
-            live_scores = _fetch_linescore_map(target_date)
+        # Always fetch live first-inning data — works for in-progress and final games
+        live_scores = _fetch_first_inning_live(target_date)
 
         picks = []
         for game in games:
@@ -196,14 +227,18 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
             away_sp = gp.away_sp.name if gp and gp.away_sp else None
             home_sp = gp.home_sp.name if gp and gp.home_sp else None
 
-            # Use DB result if available, otherwise check live scores from MLB API
+            odds_row = db.query(Odds).filter_by(game_id=game.id).first()
+            nrfi_odds = odds_row.first_inn_under_odds if odds_row else None
+            yrfi_odds = odds_row.first_inn_over_odds if odds_row else None
+
+            # DB result takes priority; fall back to live first-inning data
             if game.nrfi is not None:
                 outcome = game.nrfi
             elif game.external_id and game.external_id in live_scores:
                 s = live_scores[game.external_id]
                 outcome = (s["home"] == 0) and (s["away"] == 0)
             else:
-                outcome = None  # still in progress or not started
+                outcome = None  # not yet started
 
             picks.append({
                 "matchup": f"{game.away_team} @ {game.home_team}",
@@ -211,6 +246,9 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
                 "edge": edge,
                 "outcome": outcome,
                 "p_model": feat.p_nrfi_model,
+                "p_market": feat.p_nrfi_market,
+                "nrfi_odds": nrfi_odds,
+                "yrfi_odds": yrfi_odds,
             })
 
         if not picks:
@@ -234,9 +272,17 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
         lines = []
         for p in picks:
             icon = "✅" if p["outcome"] is True else ("❌" if p["outcome"] is False else "⏳")
-            edge_str  = f"+{p['edge'] * 100:.0f}%"
-            model_str = f"{p['p_model'] * 100:.0f}%"
-            line = f"{icon} **{p['matchup']}** — Model {model_str} · Edge {edge_str}"
+            sign = "+" if p["edge"] >= 0 else ""
+            data_line = (
+                f"Model {p['p_model'] * 100:.0f}% · "
+                f"Mkt {p['p_market'] * 100:.0f}% · "
+                f"Edge {sign}{p['edge'] * 100:.0f}%"
+            )
+            odds_line = ""
+            if p["nrfi_odds"] is not None or p["yrfi_odds"] is not None:
+                odds_line = f"\n   NRFI {_fmt_odds(p['nrfi_odds'])} · YRFI {_fmt_odds(p['yrfi_odds'])}"
+
+            line = f"{icon} **{p['matchup']}**{odds_line}\n   {data_line}"
             if p["pitchers"]:
                 line += f"\n   ↳ {p['pitchers']}"
             lines.append(line)
