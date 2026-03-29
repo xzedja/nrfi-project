@@ -51,6 +51,21 @@ services:
       - model_store:/app/models
     command: ["/bin/bash", "/app/scripts/start_cron.sh"]
 
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://nrfi:nrfi@db:5432/nrfi
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      MODEL_ARTIFACT_PATH: ${MODEL_ARTIFACT_PATH:-models/nrfi_model.pkl}
+    volumes:
+      - model_store:/app/models
+    command: ["python", "scripts/discord_bot.py"]
+
 volumes:
   postgres_data:
   model_store:
