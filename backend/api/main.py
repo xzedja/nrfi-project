@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.routers import health, games, nrfi
+from backend.api.routers import health, games, nrfi, discord_interactions
 
 app = FastAPI(
     title="NRFI Analytics API",
@@ -20,13 +20,14 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Tighten this when the frontend domain is known
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 app.include_router(health.router)
 app.include_router(games.router)
 app.include_router(nrfi.router)
+app.include_router(discord_interactions.router)
 
 
 @app.get("/")

@@ -10,3 +10,4 @@ scikit-learn
 xgboost
 numpy
 pandas
+PyNaCl

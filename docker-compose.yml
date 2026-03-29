@@ -24,6 +24,8 @@ services:
       DATABASE_URL: postgresql://nrfi:nrfi@db:5432/nrfi
       ODDS_API_KEY: ${ODDS_API_KEY}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      DISCORD_APP_ID: ${DISCORD_APP_ID:-}
+      DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
       MODEL_ARTIFACT_PATH: ${MODEL_ARTIFACT_PATH:-models/nrfi_model.pkl}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
