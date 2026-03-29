@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 from backend.db.models import Game, GamePitchers, NrfiFeatures, Odds, Pitcher
 from backend.db.session import SessionLocal
 from backend.modeling.predict import predict_for_game
+from scripts.backfill_game_results import _fetch_linescore_map
 
 # ---------------------------------------------------------------------------
 # Config
@@ -176,8 +177,13 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
     db = SessionLocal()
     try:
         games = db.query(Game).filter(Game.game_date == target_date).all()
-        picks = []
 
+        # Fetch live first-inning results from MLB API for any game not yet in DB
+        live_scores: dict[int, dict] = {}
+        if any(g.nrfi is None and g.external_id for g in games):
+            live_scores = _fetch_linescore_map(target_date)
+
+        picks = []
         for game in games:
             feat = db.query(NrfiFeatures).filter_by(game_id=game.id).first()
             if feat is None or feat.p_nrfi_model is None or feat.p_nrfi_market is None:
@@ -190,11 +196,20 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
             away_sp = gp.away_sp.name if gp and gp.away_sp else None
             home_sp = gp.home_sp.name if gp and gp.home_sp else None
 
+            # Use DB result if available, otherwise check live scores from MLB API
+            if game.nrfi is not None:
+                outcome = game.nrfi
+            elif game.external_id and game.external_id in live_scores:
+                s = live_scores[game.external_id]
+                outcome = (s["home"] == 0) and (s["away"] == 0)
+            else:
+                outcome = None  # still in progress or not started
+
             picks.append({
                 "matchup": f"{game.away_team} @ {game.home_team}",
                 "pitchers": f"{away_sp} vs {home_sp}" if away_sp and home_sp else None,
                 "edge": edge,
-                "outcome": game.nrfi,
+                "outcome": outcome,
                 "p_model": feat.p_nrfi_model,
             })
 
@@ -286,8 +301,7 @@ def _build_picks_embeds(target_date: str) -> list[dict[str, Any]]:
             "color": _COLOR_BLUE,
         }
 
-        # Discord limit: 10 embeds per message — header + up to 9 games
-        game_embeds = [_build_pick_embed(p) for p in preds[:9]]
+        game_embeds = [_build_pick_embed(p) for p in preds]
         return [header] + game_embeds
 
     finally:
@@ -342,7 +356,11 @@ async def display_picks(interaction: discord.Interaction) -> None:
         None, _build_picks_embeds, target_date
     )
     embeds = [discord.Embed.from_dict(e) for e in embeds_data]
-    await interaction.followup.send(embeds=embeds, ephemeral=True)
+
+    # Send in batches of 10 (Discord limit per message)
+    for i in range(0, len(embeds), 10):
+        chunk = embeds[i:i + 10]
+        await interaction.followup.send(embeds=chunk, ephemeral=True)
 
 
 if __name__ == "__main__":
