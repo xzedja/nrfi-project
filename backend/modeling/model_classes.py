@@ -66,9 +66,9 @@ class SeasonStartImputer(BaseEstimator, TransformerMixin):
         cols = set(X.columns)
         for null_col, proxy_col in self.PROXY_MAP:
             if null_col in cols and proxy_col in cols:
-                mask = X[null_col].isna()
+                mask = X[null_col].isna() & X[proxy_col].notna()
                 if mask.any():
-                    X.loc[mask, null_col] = X.loc[mask, proxy_col]
+                    X.loc[mask, null_col] = X.loc[mask, proxy_col].values
         for col in self.ZERO_COLS:
             if col in cols:
                 X[col] = X[col].fillna(0.0)
