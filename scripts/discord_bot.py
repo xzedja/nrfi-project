@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 from backend.db.models import Game, GamePitchers, NrfiFeatures, Odds, Pitcher
 from backend.db.session import SessionLocal
+from backend.data.fetch_odds import american_to_implied, remove_vig
 from backend.modeling.predict import predict_for_game
 from scripts.backfill_game_results import _fetch_linescore_map as _fetch_final_linescore_map
 
@@ -217,9 +218,22 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
         picks = []
         for game in games:
             feat = db.query(NrfiFeatures).filter_by(game_id=game.id).first()
-            if feat is None or feat.p_nrfi_model is None or feat.p_nrfi_market is None:
+            if feat is None or feat.p_nrfi_model is None:
                 continue
-            edge = feat.p_nrfi_model - feat.p_nrfi_market
+
+            p_market = feat.p_nrfi_market
+            if p_market is None:
+                odds_row = db.query(Odds).filter_by(game_id=game.id).first()
+                if odds_row and odds_row.first_inn_under_odds and odds_row.first_inn_over_odds:
+                    p_yrfi_raw = american_to_implied(odds_row.first_inn_over_odds)
+                    p_nrfi_raw = american_to_implied(odds_row.first_inn_under_odds)
+                    _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
+                    p_market = round(p_market, 4)
+
+            if p_market is None:
+                continue
+
+            edge = feat.p_nrfi_model - p_market
             if edge <= 0:
                 continue
 
@@ -246,7 +260,7 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
                 "edge": edge,
                 "outcome": outcome,
                 "p_model": feat.p_nrfi_model,
-                "p_market": feat.p_nrfi_market,
+                "p_market": p_market,
                 "nrfi_odds": nrfi_odds,
                 "yrfi_odds": yrfi_odds,
             })
