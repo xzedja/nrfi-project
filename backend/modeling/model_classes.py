@@ -35,14 +35,13 @@ class SeasonStartImputer(BaseEstimator, TransformerMixin):
     """
 
     # (null_col, proxy_col) — proxy is from the same row
-    # Use FIP as proxy for rolling ERA (FIP predicts future ERA better than ERA itself)
     PROXY_MAP = [
-        ("home_sp_last5_era",     "home_sp_fip"),
+        ("home_sp_last5_era",     "home_sp_era"),
         ("home_sp_last5_whip",    "home_sp_whip"),
-        ("home_sp_first_inn_era", "home_sp_fip"),
-        ("away_sp_last5_era",     "away_sp_fip"),
+        ("home_sp_first_inn_era", "home_sp_era"),
+        ("away_sp_last5_era",     "away_sp_era"),
         ("away_sp_last5_whip",    "away_sp_whip"),
-        ("away_sp_first_inn_era", "away_sp_fip"),
+        ("away_sp_first_inn_era", "away_sp_era"),
     ]
     # Velocity trend: no starts yet → neutral (0 = no change)
     ZERO_COLS = ["home_sp_velo_trend", "away_sp_velo_trend"]

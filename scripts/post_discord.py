@@ -81,13 +81,13 @@ def _recommendation(edge: float, model: float) -> str:
     edge_pct = f"{abs(edge) * 100:.0f}%"
 
     if edge >= _VALUE_PLAY_THRESHOLD:
-        return f"🟢 **Bet NRFI** — +{edge_pct} edge over market"
+        return f"🟢 **Model strongly favors NRFI** — {edge_pct} above market"
     elif edge > 0:
-        return f"🟡 **Lean NRFI** — slight edge, not a strong value play"
+        return f"🟡 **Model leans NRFI** — slight disagreement with market"
     elif edge > -_VALUE_PLAY_THRESHOLD:
-        return f"🟡 **Lean YRFI** — market more confident in NRFI than we are"
+        return f"🟡 **Model leans YRFI** — market more confident in NRFI than model"
     else:
-        return f"🔴 **Fade NRFI** — market overvalues NRFI by {edge_pct}"
+        return f"🔴 **Model strongly favors YRFI** — {edge_pct} below market"
 
 
 def _fmt_odds(o: int | None) -> str:
@@ -184,7 +184,7 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
         "title": f"NRFI Picks — {target_date}",
         "description": "  ·  ".join(parts),
         "color": _COLOR_BLUE,
-        "footer": {"text": "Edge = model's NRFI% minus market's implied NRFI%. Positive edge = we see more value than the books."},
+        "footer": {"text": "Model% = predicted probability of no run in the 1st inning. Mkt% = sportsbook implied probability. Edge = how much our model disagrees with the market."},
     }
 
 

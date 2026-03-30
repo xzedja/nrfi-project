@@ -203,15 +203,15 @@ def _load_team_batting_stats(season: int) -> dict[str, dict[str, Any]]:
     """
     Return a dict of team_abbrev → batting stat dict for the given season.
 
-    Pulls prior-season Fangraphs team batting stats (OBP, SLG).
+    Pulls the prior season's (season-1) Fangraphs team batting stats (OBP, SLG).
     Missing teams get league medians.
     """
     pybaseball.cache.enable()
 
-    logger.info("Loading Fangraphs team batting stats for season %s", season)
+    prior = season - 1
+    logger.info("Loading Fangraphs team batting stats for season %s (prior: %s)", season, prior)
     try:
-        # qual=1 returns all players; team batting stats are available via ind=1 aggregate
-        df = pybaseball.batting_stats(season, season, qual=50)
+        df = pybaseball.batting_stats(prior, prior, qual=50)
     except Exception:
         logger.warning("Could not load Fangraphs batting stats for %s — using league averages.", season)
         return {}
@@ -744,7 +744,8 @@ def build_features_for_season(season: int) -> None:
         })
 
         # --- Prior-season Fangraphs stats (for full-season ERA/FIP/WHIP/K%/BB%/HR9) ---
-        sp_stats = _load_sp_stats(season - 1, all_mlb_ids)
+        # Pass season directly — _load_sp_stats handles the prior-season offset internally
+        sp_stats = _load_sp_stats(season, all_mlb_ids)
 
         def _median_stat(key: str) -> float | None:
             vals = [v[key] for v in sp_stats.values() if v.get(key) is not None]
@@ -760,7 +761,8 @@ def build_features_for_season(season: int) -> None:
         }
 
         # --- Prior-season team batting stats (OBP, SLG) ---
-        team_batting_result = _load_team_batting_stats(season - 1)
+        # Pass season directly — _load_team_batting_stats handles the prior-season offset internally
+        team_batting_result = _load_team_batting_stats(season)
         if isinstance(team_batting_result, tuple):
             team_batting, league_avg_batting = team_batting_result
         else:

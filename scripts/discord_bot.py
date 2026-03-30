@@ -122,13 +122,13 @@ def _edge_color(edge: float | None) -> int:
 def _recommendation(edge: float) -> str:
     edge_pct = f"{abs(edge) * 100:.0f}%"
     if edge >= _VALUE_PLAY_THRESHOLD:
-        return f"🟢 **Bet NRFI** — +{edge_pct} edge over market"
+        return f"🟢 **Model strongly favors NRFI** — {edge_pct} above market"
     elif edge > 0:
-        return "🟡 **Lean NRFI** — slight edge, not a strong value play"
+        return f"🟡 **Model leans NRFI** — slight disagreement with market"
     elif edge > -_VALUE_PLAY_THRESHOLD:
-        return "🟡 **Lean YRFI** — market more confident in NRFI than we are"
+        return f"🟡 **Model leans YRFI** — market more confident in NRFI than model"
     else:
-        return f"🔴 **Fade NRFI** — market overvalues NRFI by {edge_pct}"
+        return f"🔴 **Model strongly favors YRFI** — {edge_pct} below market"
 
 
 def _build_pick_embed(pred: dict[str, Any]) -> dict:
@@ -307,7 +307,7 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
             "title": f"NRFI Picks — {target_date}",
             "description": f"{record_str}\n\n" + "\n\n".join(lines),
             "color": color,
-            "footer": {"text": "Edge = model's NRFI% minus market's implied NRFI%. Positive edge = we see more value than the books."},
+            "footer": {"text": "Model% = predicted probability of no run in the 1st inning. Mkt% = sportsbook implied probability. Edge = how much our model disagrees with the market."},
         }
     finally:
         db.close()
@@ -360,7 +360,7 @@ def _build_picks_embeds(target_date: str) -> list[dict[str, Any]]:
             "title": f"NRFI Picks — {target_date}",
             "description": "  ·  ".join(parts),
             "color": _COLOR_BLUE,
-            "footer": {"text": "Edge = model's NRFI% minus market's implied NRFI%. Positive edge = we see more value than the books."},
+            "footer": {"text": "Model% = predicted probability of no run in the 1st inning. Mkt% = sportsbook implied probability. Edge = how much our model disagrees with the market."},
         }
 
         game_embeds = [_build_pick_embed(p) for p in preds]

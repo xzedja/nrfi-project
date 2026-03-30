@@ -193,7 +193,7 @@ def post_results(target_date: str | None = None) -> None:
                 "inline": True,
             },
         ],
-        "footer": {"text": "Edge = model's NRFI% minus market's implied NRFI%. A pick is taken when edge > 0."},
+        "footer": {"text": "Model% = predicted probability of no run in the 1st inning. Mkt% = sportsbook implied probability. Edge = how much our model disagrees with the market."},
     }
 
     try:
