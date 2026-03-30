@@ -57,8 +57,12 @@ def _load_sp_stats(season: int, pitcher_mlb_ids: list[int]) -> dict[int, dict[st
     """
     Return a dict of mlbam_id → SP stat dict for the given season.
 
-    Pulls Fangraphs pitching leaderboard data and maps it to MLB IDs via
-    pybaseball's playerid_reverse_lookup. Missing pitchers get league medians.
+    Blends the 3 prior seasons (season-1, season-2, season-3) using IP-weighted
+    averages with recency weights (5x, 3x, 2x). This produces more stable
+    pitcher profiles than a single prior season, and handles missed seasons
+    (injury, minors) gracefully by using available years.
+
+    Missing pitchers (no data in any prior season) get league medians.
 
     Stat keys: era, whip, k_pct, bb_pct, hr9
     """
@@ -67,45 +71,68 @@ def _load_sp_stats(season: int, pitcher_mlb_ids: list[int]) -> dict[int, dict[st
 
     pybaseball.cache.enable()
 
-    logger.info("Loading Fangraphs pitching stats for season %s", season)
-    try:
-        fg_df = pybaseball.pitching_stats(season, season, qual=1)
-    except Exception:
-        logger.warning("Could not load Fangraphs pitching stats for %s — using league averages.", season)
+    # Recency weights: season-1 = 5x, season-2 = 3x, season-3 = 2x
+    prior_seasons = [season - 1, season - 2, season - 3]
+    recency_weights = {season - 1: 5, season - 2: 3, season - 3: 2}
+
+    # Load Fangraphs data for all 3 prior seasons
+    season_dfs: dict[int, pd.DataFrame] = {}
+    for s in prior_seasons:
+        logger.info("Loading Fangraphs pitching stats for season %s", s)
+        try:
+            df = pybaseball.pitching_stats(s, s, qual=1)
+            if df is not None and not df.empty:
+                df.columns = [str(c).strip() for c in df.columns]
+                season_dfs[s] = df
+        except Exception:
+            logger.warning("Could not load Fangraphs pitching stats for %s — skipping.", s)
+
+    if not season_dfs:
+        logger.warning("No Fangraphs data available for any prior season — using empty stats.")
         return {}
 
-    if fg_df is None or fg_df.empty:
-        return {}
+    # Use the most recent available season to compute league medians
+    most_recent_df = season_dfs[max(season_dfs)]
+    hr9_col = next(
+        (c for c in most_recent_df.columns if c.replace("/", "").replace(" ", "").upper() == "HR9"),
+        None,
+    )
 
-    fg_df.columns = [str(c).strip() for c in fg_df.columns]
-    hr9_col = next((c for c in fg_df.columns if c.replace("/", "").replace(" ", "").upper() == "HR9"), None)
-
-    def _safe_median(col: str) -> float | None:
-        if col not in fg_df.columns:
+    def _safe_median(df: pd.DataFrame, col: str) -> float | None:
+        if col not in df.columns:
             return None
-        vals = fg_df[col].dropna().tolist()
+        vals = df[col].dropna().tolist()
         return median(vals) if vals else None
 
     league_avg: dict[str, Any] = {
-        "era": _safe_median("ERA"),
-        "whip": _safe_median("WHIP"),
-        "k_pct": _safe_median("K%"),
-        "bb_pct": _safe_median("BB%"),
-        "hr9": _safe_median(hr9_col) if hr9_col else None,
+        "era":    _safe_median(most_recent_df, "ERA"),
+        "whip":   _safe_median(most_recent_df, "WHIP"),
+        "k_pct":  _safe_median(most_recent_df, "K%"),
+        "bb_pct": _safe_median(most_recent_df, "BB%"),
+        "hr9":    _safe_median(most_recent_df, hr9_col) if hr9_col else None,
     }
 
-    fg_to_stats: dict[int, dict[str, Any]] = {}
-    for _, row in fg_df.iterrows():
-        fg_id = row.get("IDfg")
-        if fg_id is None or (fg_id != fg_id):
-            continue
-        fg_to_stats[int(fg_id)] = {
-            "era": row.get("ERA"),
-            "whip": row.get("WHIP"),
-            "k_pct": row.get("K%"),
-            "bb_pct": row.get("BB%"),
-            "hr9": row.get(hr9_col) if hr9_col else None,
-        }
+    # Build fg_id → {season: {stat: value, ip: float}} lookup across all seasons
+    fg_season_stats: dict[int, dict[int, dict[str, Any]]] = {}
+    for s, df in season_dfs.items():
+        s_hr9_col = next(
+            (c for c in df.columns if c.replace("/", "").replace(" ", "").upper() == "HR9"),
+            None,
+        )
+        for _, row in df.iterrows():
+            fg_id = row.get("IDfg")
+            if fg_id is None or (fg_id != fg_id):
+                continue
+            fg_id = int(fg_id)
+            ip = row.get("IP") or 0.0
+            fg_season_stats.setdefault(fg_id, {})[s] = {
+                "era":    row.get("ERA"),
+                "whip":   row.get("WHIP"),
+                "k_pct":  row.get("K%"),
+                "bb_pct": row.get("BB%"),
+                "hr9":    row.get(s_hr9_col) if s_hr9_col else None,
+                "ip":     float(ip),
+            }
 
     logger.info("Reverse-looking up %d pitcher MLB IDs", len(pitcher_mlb_ids))
     try:
@@ -122,11 +149,35 @@ def _load_sp_stats(season: int, pitcher_mlb_ids: list[int]) -> dict[int, dict[st
             if mlbam is not None and fg is not None:
                 mlbam_to_fg[int(mlbam)] = int(fg)
 
+    def _blend_stats(fg_id: int) -> dict[str, Any]:
+        """IP-weighted blend across available prior seasons with recency multiplier."""
+        seasons_data = fg_season_stats.get(fg_id, {})
+        if not seasons_data:
+            return league_avg.copy()
+
+        blended: dict[str, Any] = {}
+        for stat in ("era", "whip", "k_pct", "bb_pct", "hr9"):
+            total_weight = 0.0
+            weighted_sum = 0.0
+            for s, sdata in seasons_data.items():
+                val = sdata.get(stat)
+                ip = sdata.get("ip", 0.0)
+                rw = recency_weights.get(s, 1)
+                if val is not None and ip > 0:
+                    w = ip * rw
+                    weighted_sum += val * w
+                    total_weight += w
+            if total_weight > 0:
+                blended[stat] = weighted_sum / total_weight
+            else:
+                blended[stat] = league_avg.get(stat)
+        return blended
+
     result: dict[int, dict[str, Any]] = {}
     for mlbam_id in pitcher_mlb_ids:
         fg_id = mlbam_to_fg.get(mlbam_id)
-        if fg_id is not None and fg_id in fg_to_stats:
-            result[mlbam_id] = fg_to_stats[fg_id]
+        if fg_id is not None:
+            result[mlbam_id] = _blend_stats(fg_id)
         else:
             result[mlbam_id] = league_avg.copy()
 
