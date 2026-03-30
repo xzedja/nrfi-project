@@ -142,7 +142,7 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
 
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
-        data_line = f"Model {model * 100:.0f}% · Mkt {market * 100:.0f}% · Edge {sign}{edge * 100:.0f}%"
+        data_line = f"Model {model * 100:.1f}% · Mkt {market * 100:.1f}% · Edge {sign}{edge * 100:.1f}%"
         description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge, model)}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"

@@ -155,7 +155,7 @@ def _build_pick_embed(pred: dict[str, Any]) -> dict:
 
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
-        data_line = f"Model {model * 100:.0f}% · Mkt {market * 100:.0f}% · Edge {sign}{edge * 100:.0f}%"
+        data_line = f"Model {model * 100:.1f}% · Mkt {market * 100:.1f}% · Edge {sign}{edge * 100:.1f}%"
         description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge)}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"
@@ -288,9 +288,9 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
             icon = "✅" if p["outcome"] is True else ("❌" if p["outcome"] is False else "⏳")
             sign = "+" if p["edge"] >= 0 else ""
             data_line = (
-                f"Model {p['p_model'] * 100:.0f}% · "
-                f"Mkt {p['p_market'] * 100:.0f}% · "
-                f"Edge {sign}{p['edge'] * 100:.0f}%"
+                f"Model {p['p_model'] * 100:.1f}% · "
+                f"Mkt {p['p_market'] * 100:.1f}% · "
+                f"Edge {sign}{p['edge'] * 100:.1f}%"
             )
             odds_line = ""
             if p["nrfi_odds"] is not None or p["yrfi_odds"] is not None:
