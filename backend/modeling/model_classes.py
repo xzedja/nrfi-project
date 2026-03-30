@@ -49,18 +49,21 @@ class SeasonStartImputer(BaseEstimator, TransformerMixin):
 
     def fit(self, X: pd.DataFrame, y=None) -> "SeasonStartImputer":
         self.feature_names_in_ = list(X.columns)
-        # Compute training medians after applying proxy fills (for pass 2)
         X_pass1 = self._proxy_fill(X.copy())
-        self.medians_ = X_pass1.median()
+        # Replace NaN medians (all-NULL columns) with 0.0 so transform never emits NaN
+        self.medians_ = X_pass1.median().fillna(0.0)
         return self
 
     def transform(self, X: pd.DataFrame) -> np.ndarray:
         X_out = self._proxy_fill(X.copy())
         # Pass 2: fill remaining NULLs with training medians
         for col in X_out.columns:
-            if X_out[col].isna().any() and col in self.medians_.index:
+            if col in self.medians_.index:
                 X_out[col] = X_out[col].fillna(self.medians_[col])
-        return X_out.values
+        # Safety net: convert to float and fill any remaining NaN with 0
+        X_arr = X_out.astype(float).values
+        np.nan_to_num(X_arr, nan=0.0, copy=False)
+        return X_arr
 
     def _proxy_fill(self, X: pd.DataFrame) -> pd.DataFrame:
         cols = set(X.columns)
@@ -68,7 +71,7 @@ class SeasonStartImputer(BaseEstimator, TransformerMixin):
             if null_col in cols and proxy_col in cols:
                 mask = X[null_col].isna() & X[proxy_col].notna()
                 if mask.any():
-                    X.loc[mask, null_col] = X.loc[mask, proxy_col].values
+                    X[null_col] = X[null_col].where(~mask, X[proxy_col])
         for col in self.ZERO_COLS:
             if col in cols:
                 X[col] = X[col].fillna(0.0)
