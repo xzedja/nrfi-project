@@ -356,9 +356,23 @@ def _build_picks_embeds(target_date: str) -> list[dict[str, Any]]:
         if no_lines:
             parts.append(f"{no_lines} no lines yet")
 
+        description = "  ·  ".join(parts)
+
+        try:
+            from datetime import date as _date
+            d = _date.fromisoformat(target_date)
+            if d.month < 4 or (d.month == 4 and d.day < 15):
+                description += (
+                    "\n\n⚠️ **Early-season notice:** Predictions are based primarily on "
+                    "prior-season stats since most pitchers haven't accumulated enough 2026 "
+                    "starts yet for current-form data. Confidence will improve as the season progresses."
+                )
+        except Exception:
+            pass
+
         header = {
             "title": f"NRFI Picks — {target_date}",
-            "description": "  ·  ".join(parts),
+            "description": description,
             "color": _COLOR_BLUE,
             "footer": {"text": "Model% = predicted probability of no run in the 1st inning. Mkt% = sportsbook implied probability. Edge = how much our model disagrees with the market."},
         }
