@@ -17,7 +17,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from backend.db.models import Game, NrfiFeatures
+from backend.db.models import Game, NrfiFeatures, Odds
 from backend.modeling.model_store import load_model
 from backend.modeling.train_model import FEATURE_COLS
 
@@ -70,6 +70,15 @@ def predict_for_game(game_id: int, db: Session) -> dict[str, Any] | None:
     p_model = float(model.predict_proba(X)[0, 1])
 
     p_market = feat.p_nrfi_market
+    if p_market is None:
+        odds_row = db.query(Odds).filter(Odds.game_id == game_id).first()
+        if odds_row and odds_row.first_inn_under_odds and odds_row.first_inn_over_odds:
+            from backend.data.fetch_odds import american_to_implied, remove_vig
+            p_yrfi_raw = american_to_implied(odds_row.first_inn_over_odds)
+            p_nrfi_raw = american_to_implied(odds_row.first_inn_under_odds)
+            _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
+            p_market = round(p_market, 4)
+
     edge = round(p_model - p_market, 4) if p_market is not None else None
 
     return {
