@@ -106,6 +106,7 @@ def _load_sp_stats(season: int, pitcher_mlb_ids: list[int]) -> dict[int, dict[st
 
     league_avg: dict[str, Any] = {
         "era":    _safe_median(most_recent_df, "ERA"),
+        "fip":    _safe_median(most_recent_df, "FIP"),
         "whip":   _safe_median(most_recent_df, "WHIP"),
         "k_pct":  _safe_median(most_recent_df, "K%"),
         "bb_pct": _safe_median(most_recent_df, "BB%"),
@@ -127,6 +128,7 @@ def _load_sp_stats(season: int, pitcher_mlb_ids: list[int]) -> dict[int, dict[st
             ip = row.get("IP") or 0.0
             fg_season_stats.setdefault(fg_id, {})[s] = {
                 "era":    row.get("ERA"),
+                "fip":    row.get("FIP"),
                 "whip":   row.get("WHIP"),
                 "k_pct":  row.get("K%"),
                 "bb_pct": row.get("BB%"),
@@ -156,7 +158,7 @@ def _load_sp_stats(season: int, pitcher_mlb_ids: list[int]) -> dict[int, dict[st
             return league_avg.copy()
 
         blended: dict[str, Any] = {}
-        for stat in ("era", "whip", "k_pct", "bb_pct", "hr9"):
+        for stat in ("era", "fip", "whip", "k_pct", "bb_pct", "hr9"):
             total_weight = 0.0
             weighted_sum = 0.0
             for s, sdata in seasons_data.items():
@@ -182,6 +184,78 @@ def _load_sp_stats(season: int, pitcher_mlb_ids: list[int]) -> dict[int, dict[st
             result[mlbam_id] = league_avg.copy()
 
     return result
+
+
+# Fangraphs team abbreviation → our Statcast abbreviation
+_FG_TEAM_TO_ABBREV: dict[str, str] = {
+    "ARI": "ARI", "ATL": "ATL", "BAL": "BAL", "BOS": "BOS",
+    "CHC": "CHC", "CWS": "CWS", "CIN": "CIN", "CLE": "CLE",
+    "COL": "COL", "DET": "DET", "HOU": "HOU", "KCR": "KC",
+    "LAA": "LAA", "LAD": "LAD", "MIA": "MIA", "MIL": "MIL",
+    "MIN": "MIN", "NYM": "NYM", "NYY": "NYY", "OAK": "ATH",
+    "PHI": "PHI", "PIT": "PIT", "SDP": "SD",  "SEA": "SEA",
+    "SFG": "SF",  "STL": "STL", "TBR": "TB",  "TEX": "TEX",
+    "TOR": "TOR", "WSN": "WSH", "ATH": "ATH",
+}
+
+
+def _load_team_batting_stats(season: int) -> dict[str, dict[str, Any]]:
+    """
+    Return a dict of team_abbrev → batting stat dict for the given season.
+
+    Pulls prior-season Fangraphs team batting stats (OBP, SLG).
+    Missing teams get league medians.
+    """
+    pybaseball.cache.enable()
+
+    logger.info("Loading Fangraphs team batting stats for season %s", season)
+    try:
+        # qual=1 returns all players; team batting stats are available via ind=1 aggregate
+        df = pybaseball.batting_stats(season, season, qual=50)
+    except Exception:
+        logger.warning("Could not load Fangraphs batting stats for %s — using league averages.", season)
+        return {}
+
+    if df is None or df.empty:
+        return {}
+
+    df.columns = [str(c).strip() for c in df.columns]
+
+    if "Team" not in df.columns or "OBP" not in df.columns or "SLG" not in df.columns:
+        logger.warning("Expected columns missing from Fangraphs batting data.")
+        return {}
+
+    # PA-weighted aggregate per team
+    team_stats: dict[str, dict[str, list]] = {}
+    for _, row in df.iterrows():
+        fg_team = str(row.get("Team", "")).strip()
+        abbrev = _FG_TEAM_TO_ABBREV.get(fg_team, fg_team)
+        pa = float(row.get("PA") or 0)
+        obp = row.get("OBP")
+        slg = row.get("SLG")
+        if pa > 0 and obp is not None and slg is not None:
+            d = team_stats.setdefault(abbrev, {"pa": [], "obp": [], "slg": []})
+            d["pa"].append(pa)
+            d["obp"].append(float(obp) * pa)
+            d["slg"].append(float(slg) * pa)
+
+    result: dict[str, dict[str, Any]] = {}
+    all_obp, all_slg = [], []
+    for abbrev, d in team_stats.items():
+        total_pa = sum(d["pa"])
+        if total_pa > 0:
+            obp_val = sum(d["obp"]) / total_pa
+            slg_val = sum(d["slg"]) / total_pa
+            result[abbrev] = {"obp": round(obp_val, 4), "slg": round(slg_val, 4)}
+            all_obp.append(obp_val)
+            all_slg.append(slg_val)
+
+    league_obp = median(all_obp) if all_obp else None
+    league_slg = median(all_slg) if all_slg else None
+    league_avg_batting = {"obp": league_obp, "slg": league_slg}
+
+    logger.info("  Loaded team batting stats for %d teams", len(result))
+    return result, league_avg_batting
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +743,7 @@ def build_features_for_season(season: int) -> None:
             if p is not None
         })
 
-        # --- Prior-season Fangraphs stats (for full-season ERA/WHIP/K%/BB%/HR9) ---
+        # --- Prior-season Fangraphs stats (for full-season ERA/FIP/WHIP/K%/BB%/HR9) ---
         sp_stats = _load_sp_stats(season - 1, all_mlb_ids)
 
         def _median_stat(key: str) -> float | None:
@@ -677,12 +751,20 @@ def build_features_for_season(season: int) -> None:
             return median(vals) if vals else None
 
         league_avg = {
-            "era": _median_stat("era"),
-            "whip": _median_stat("whip"),
-            "k_pct": _median_stat("k_pct"),
+            "era":    _median_stat("era"),
+            "fip":    _median_stat("fip"),
+            "whip":   _median_stat("whip"),
+            "k_pct":  _median_stat("k_pct"),
             "bb_pct": _median_stat("bb_pct"),
-            "hr9": _median_stat("hr9"),
+            "hr9":    _median_stat("hr9"),
         }
+
+        # --- Prior-season team batting stats (OBP, SLG) ---
+        team_batting_result = _load_team_batting_stats(season - 1)
+        if isinstance(team_batting_result, tuple):
+            team_batting, league_avg_batting = team_batting_result
+        else:
+            team_batting, league_avg_batting = {}, {"obp": None, "slg": None}
 
         # --- Within-season rolling stats from Statcast ---
         logger.info("  Loading Statcast data for within-season pitcher rolling stats...")
@@ -734,17 +816,22 @@ def build_features_for_season(season: int) -> None:
             at = team_stats.get((game.away_team, game.game_date), {})
             wx = weather_map.get(game.id, {})
 
+            ht_bat = team_batting.get(game.home_team, league_avg_batting)
+            at_bat = team_batting.get(game.away_team, league_avg_batting)
+
             db.add(NrfiFeatures(
                 game_id=game.id,
 
                 # Prior-season Fangraphs features
                 home_sp_era=h.get("era"),
+                home_sp_fip=h.get("fip"),
                 home_sp_whip=h.get("whip"),
                 home_sp_k_pct=h.get("k_pct"),
                 home_sp_bb_pct=h.get("bb_pct"),
                 home_sp_hr9=h.get("hr9"),
 
                 away_sp_era=a.get("era"),
+                away_sp_fip=a.get("fip"),
                 away_sp_whip=a.get("whip"),
                 away_sp_k_pct=a.get("k_pct"),
                 away_sp_bb_pct=a.get("bb_pct"),
@@ -768,6 +855,10 @@ def build_features_for_season(season: int) -> None:
                 # Team offense features
                 home_team_first_inn_runs_per_game=ht.get("first_inn_runs_scored_per_game"),
                 away_team_first_inn_runs_per_game=at.get("first_inn_runs_scored_per_game"),
+                home_team_obp=ht_bat.get("obp"),
+                away_team_obp=at_bat.get("obp"),
+                home_team_slg=ht_bat.get("slg"),
+                away_team_slg=at_bat.get("slg"),
 
                 # Park and weather
                 park_factor=park_factors.get(game.park, 1.0),

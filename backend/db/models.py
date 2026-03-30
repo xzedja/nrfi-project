@@ -125,6 +125,7 @@ class NrfiFeatures(Base):
 
     # Starter features (home SP)
     home_sp_era = Column(Float, nullable=True)
+    home_sp_fip = Column(Float, nullable=True)
     home_sp_whip = Column(Float, nullable=True)
     home_sp_k_pct = Column(Float, nullable=True)
     home_sp_bb_pct = Column(Float, nullable=True)
@@ -132,6 +133,7 @@ class NrfiFeatures(Base):
 
     # Starter features (away SP)
     away_sp_era = Column(Float, nullable=True)
+    away_sp_fip = Column(Float, nullable=True)
     away_sp_whip = Column(Float, nullable=True)
     away_sp_k_pct = Column(Float, nullable=True)
     away_sp_bb_pct = Column(Float, nullable=True)
@@ -140,6 +142,10 @@ class NrfiFeatures(Base):
     # Team offense features
     home_team_first_inn_runs_per_game = Column(Float, nullable=True)
     away_team_first_inn_runs_per_game = Column(Float, nullable=True)
+    home_team_obp = Column(Float, nullable=True)
+    away_team_obp = Column(Float, nullable=True)
+    home_team_slg = Column(Float, nullable=True)
+    away_team_slg = Column(Float, nullable=True)
 
     # Park factor
     park_factor = Column(Float, nullable=True)

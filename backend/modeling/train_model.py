@@ -58,13 +58,15 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 FEATURE_COLS = [
-    # Prior-season Fangraphs stats
+    # Prior-season Fangraphs pitcher stats
     "home_sp_era",
+    "home_sp_fip",
     "home_sp_whip",
     "home_sp_k_pct",
     "home_sp_bb_pct",
     "home_sp_hr9",
     "away_sp_era",
+    "away_sp_fip",
     "away_sp_whip",
     "away_sp_k_pct",
     "away_sp_bb_pct",
@@ -82,9 +84,14 @@ FEATURE_COLS = [
     "away_sp_avg_velo",
     "away_sp_velo_trend",
     "away_sp_days_rest",
-    # Team and park
+    # Team offense
     "home_team_first_inn_runs_per_game",
     "away_team_first_inn_runs_per_game",
+    "home_team_obp",
+    "away_team_obp",
+    "home_team_slg",
+    "away_team_slg",
+    # Park
     "park_factor",
     # Weather
     "temperature_f",
