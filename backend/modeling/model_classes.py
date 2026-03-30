@@ -13,9 +13,65 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.base import BaseEstimator, ClassifierMixin, TransformerMixin
 from sklearn.impute import SimpleImputer
 from xgboost import XGBClassifier
+
+
+class SeasonStartImputer(BaseEstimator, TransformerMixin):
+    """
+    Two-pass imputer that handles start-of-season NULLs intelligently.
+
+    Pass 1 — pitcher-specific proxy fill (row-level):
+      NULL rolling features are filled with the same pitcher's prior-season
+      equivalent from the same row, rather than the league median.
+      e.g. home_sp_last5_era = NULL → use home_sp_era
+           home_sp_velo_trend = NULL → use 0.0 (no trend = neutral)
+
+    Pass 2 — median fill for anything still NULL after pass 1.
+
+    This ensures start-of-season games show pitcher-specific predictions
+    rather than collapsing every game to the league average.
+    """
+
+    # (null_col, proxy_col) — proxy is from the same row
+    PROXY_MAP = [
+        ("home_sp_last5_era",     "home_sp_era"),
+        ("home_sp_last5_whip",    "home_sp_whip"),
+        ("home_sp_first_inn_era", "home_sp_era"),
+        ("away_sp_last5_era",     "away_sp_era"),
+        ("away_sp_last5_whip",    "away_sp_whip"),
+        ("away_sp_first_inn_era", "away_sp_era"),
+    ]
+    # Velocity trend: no starts yet → neutral (0 = no change)
+    ZERO_COLS = ["home_sp_velo_trend", "away_sp_velo_trend"]
+
+    def fit(self, X: pd.DataFrame, y=None) -> "SeasonStartImputer":
+        self.feature_names_in_ = list(X.columns)
+        # Compute training medians after applying proxy fills (for pass 2)
+        X_pass1 = self._proxy_fill(X.copy())
+        self.medians_ = X_pass1.median()
+        return self
+
+    def transform(self, X: pd.DataFrame) -> np.ndarray:
+        X_out = self._proxy_fill(X.copy())
+        # Pass 2: fill remaining NULLs with training medians
+        for col in X_out.columns:
+            if X_out[col].isna().any() and col in self.medians_.index:
+                X_out[col] = X_out[col].fillna(self.medians_[col])
+        return X_out.values
+
+    def _proxy_fill(self, X: pd.DataFrame) -> pd.DataFrame:
+        cols = set(X.columns)
+        for null_col, proxy_col in self.PROXY_MAP:
+            if null_col in cols and proxy_col in cols:
+                mask = X[null_col].isna()
+                if mask.any():
+                    X.loc[mask, null_col] = X.loc[mask, proxy_col]
+        for col in self.ZERO_COLS:
+            if col in cols:
+                X[col] = X[col].fillna(0.0)
+        return X
 
 
 class XGBModel(BaseEstimator, ClassifierMixin):
@@ -38,7 +94,7 @@ class XGBModel(BaseEstimator, ClassifierMixin):
         X_val: pd.DataFrame | None = None,
         y_val: pd.Series | None = None,
     ) -> "XGBModel":
-        self.imputer_ = SimpleImputer(strategy="median")
+        self.imputer_ = SeasonStartImputer()
         X_imp = self.imputer_.fit_transform(X)
 
         eval_set = None

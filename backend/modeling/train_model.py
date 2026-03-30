@@ -51,7 +51,7 @@ sys.path.insert(0, ".")
 
 from backend.db.models import Game, NrfiFeatures
 from backend.db.session import SessionLocal
-from backend.modeling.model_classes import CalibratedModel, XGBModel
+from backend.modeling.model_classes import CalibratedModel, SeasonStartImputer, XGBModel
 from backend.modeling.model_store import DEFAULT_MODEL_PATH, save_model
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -150,7 +150,7 @@ def evaluate(label: str, model: Any, X: pd.DataFrame, y: pd.Series) -> dict[str,
 
 def _build_logistic_pipeline() -> Pipeline:
     return Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
+        ("imputer", SeasonStartImputer()),
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(max_iter=1000, random_state=42)),
     ])
