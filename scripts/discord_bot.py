@@ -423,5 +423,43 @@ async def display_picks(interaction: discord.Interaction) -> None:
         await interaction.followup.send(embeds=chunk, ephemeral=True)
 
 
+def _ensure_tomorrow_pipeline(target_date: str) -> None:
+    """Run the daily pipeline for target_date if no predictions exist yet."""
+    from scripts.run_daily import run_daily
+    db = SessionLocal()
+    try:
+        games = db.query(Game).filter(Game.game_date == target_date).all()
+        has_predictions = any(
+            db.query(NrfiFeatures).filter_by(game_id=g.id).first() is not None
+            for g in games
+        )
+    finally:
+        db.close()
+
+    if not has_predictions:
+        logger.info("No predictions found for %s — running pipeline.", target_date)
+        run_daily(target_date=target_date)
+
+
+@bot.tree.command(name="tomorrow-picks", description="Show tomorrow's NRFI picks privately (only you can see).")
+async def tomorrow_picks(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    from datetime import timedelta
+    target_date = str(date.today() + timedelta(days=1))
+
+    await asyncio.get_event_loop().run_in_executor(
+        None, _ensure_tomorrow_pipeline, target_date
+    )
+
+    embeds_data = await asyncio.get_event_loop().run_in_executor(
+        None, _build_picks_embeds, target_date
+    )
+    embeds = [discord.Embed.from_dict(e) for e in embeds_data]
+
+    for i in range(0, len(embeds), 10):
+        chunk = embeds[i:i + 10]
+        await interaction.followup.send(embeds=chunk, ephemeral=True)
+
+
 if __name__ == "__main__":
     bot.run(BOT_TOKEN)
