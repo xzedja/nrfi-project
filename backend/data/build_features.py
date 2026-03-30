@@ -138,12 +138,49 @@ def _load_sp_stats(season: int, pitcher_mlb_ids: list[int]) -> dict[int, dict[st
 # ---------------------------------------------------------------------------
 
 def _precompute_team_stats(
-    db: Session, season: int
+    db: Session, season: int, min_games: int = 10
 ) -> dict[tuple[str, date], dict[str, float | None]]:
     """
     For every (team, game_date) pair in the season, compute the team's
     rolling first-inning run rates using only games played BEFORE that date.
+
+    If fewer than min_games have been played in the current season, falls back
+    to the prior season's full-season average to avoid noisy early-season values.
     """
+    # --- Prior season averages (fallback for early-season games) ---
+    prior_season_games = (
+        db.query(Game)
+        .filter(
+            extract("year", Game.game_date) == season - 1,
+            Game.inning_1_home_runs.isnot(None),
+            Game.inning_1_away_runs.isnot(None),
+        )
+        .all()
+    )
+
+    prior_team_data: dict[str, list[tuple[int, int]]] = {}
+    for g in prior_season_games:
+        prior_team_data.setdefault(g.home_team, []).append(
+            (g.inning_1_home_runs, g.inning_1_away_runs)
+        )
+        prior_team_data.setdefault(g.away_team, []).append(
+            (g.inning_1_away_runs, g.inning_1_home_runs)
+        )
+
+    prior_season_avg: dict[str, dict[str, float | None]] = {}
+    for team, data in prior_team_data.items():
+        scored_vals  = [sc for sc, _ in data if sc is not None]
+        allowed_vals = [al for _, al in data if al is not None]
+        prior_season_avg[team] = {
+            "first_inn_runs_scored_per_game": (
+                sum(scored_vals) / len(scored_vals) if scored_vals else None
+            ),
+            "first_inn_runs_allowed_per_game": (
+                sum(allowed_vals) / len(allowed_vals) if allowed_vals else None
+            ),
+        }
+
+    # --- Current season rolling stats ---
     games = (
         db.query(Game)
         .filter(extract("year", Game.game_date) == season)
@@ -172,13 +209,14 @@ def _precompute_team_stats(
                 if d < g.game_date
             ]
 
-            if not prior:
-                result[key] = {
+            if len(prior) < min_games:
+                # Too few games — use prior season average to avoid noisy values
+                result[key] = prior_season_avg.get(team, {
                     "first_inn_runs_scored_per_game": None,
                     "first_inn_runs_allowed_per_game": None,
-                }
+                })
             else:
-                scored_vals = [sc for sc, _ in prior if sc is not None]
+                scored_vals  = [sc for sc, _ in prior if sc is not None]
                 allowed_vals = [al for _, al in prior if al is not None]
                 result[key] = {
                     "first_inn_runs_scored_per_game": (
