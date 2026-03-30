@@ -307,6 +307,7 @@ def _build_record_embed(target_date: str) -> dict[str, Any]:
             "title": f"NRFI Picks — {target_date}",
             "description": f"{record_str}\n\n" + "\n\n".join(lines),
             "color": color,
+            "footer": {"text": "Edge = model's NRFI% minus market's implied NRFI%. Positive edge = we see more value than the books."},
         }
     finally:
         db.close()
@@ -359,6 +360,7 @@ def _build_picks_embeds(target_date: str) -> list[dict[str, Any]]:
             "title": f"NRFI Picks — {target_date}",
             "description": "  ·  ".join(parts),
             "color": _COLOR_BLUE,
+            "footer": {"text": "Edge = model's NRFI% minus market's implied NRFI%. Positive edge = we see more value than the books."},
         }
 
         game_embeds = [_build_pick_embed(p) for p in preds]

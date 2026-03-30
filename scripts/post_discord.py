@@ -184,6 +184,7 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
         "title": f"NRFI Picks — {target_date}",
         "description": "  ·  ".join(parts),
         "color": _COLOR_BLUE,
+        "footer": {"text": "Edge = model's NRFI% minus market's implied NRFI%. Positive edge = we see more value than the books."},
     }
 
 

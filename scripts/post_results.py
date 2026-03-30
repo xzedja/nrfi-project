@@ -36,7 +36,8 @@ sys.path.insert(0, ".")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-from backend.db.models import Game, NrfiFeatures
+from backend.data.fetch_odds import american_to_implied, remove_vig
+from backend.db.models import Game, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
 from scripts.post_discord import _post_payload
 
@@ -48,6 +49,19 @@ _COLOR_RED    = 0xE74C3C
 _COLOR_GOLD   = 0xF1C40F
 _COLOR_BLUE   = 0x3498DB
 _COLOR_GRAY   = 0x95A5A6
+
+
+def _get_p_market(feat: NrfiFeatures, db) -> float | None:
+    """Return p_nrfi_market from nrfi_features, falling back to the Odds table."""
+    if feat.p_nrfi_market is not None:
+        return feat.p_nrfi_market
+    odds_row = db.query(Odds).filter_by(game_id=feat.game_id).first()
+    if odds_row and odds_row.first_inn_under_odds and odds_row.first_inn_over_odds:
+        p_yrfi_raw = american_to_implied(odds_row.first_inn_over_odds)
+        p_nrfi_raw = american_to_implied(odds_row.first_inn_under_odds)
+        _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
+        return round(p_market, 4)
+    return None
 
 
 def _win_loss_str(wins: int, losses: int) -> str:
@@ -90,20 +104,19 @@ def post_results(target_date: str | None = None) -> None:
         yday_val_w = yday_val_l = 0
 
         for game, feat in rows:
-            edge = (
-                feat.p_nrfi_model - feat.p_nrfi_market
-                if feat.p_nrfi_market is not None
-                else None
-            )
-            if edge is None or edge <= 0:
-                continue  # no pick on negative or missing edge
+            p_market = _get_p_market(feat, db)
+            if p_market is None:
+                continue
+            edge = feat.p_nrfi_model - p_market
+            if edge <= 0:
+                continue  # no pick on negative edge
 
             actual_nrfi = bool(feat.nrfi_label)
             won = actual_nrfi
             result_icon = "✅" if won else "❌"
             outcome_str = "NRFI ✓" if actual_nrfi else "YRFI"
             model_pct = f"{feat.p_nrfi_model * 100:.0f}%"
-            mkt_pct = f"{feat.p_nrfi_market * 100:.0f}%"
+            mkt_pct = f"{p_market * 100:.0f}%"
             edge_pct = f"+{edge * 100:.0f}%"
 
             yesterday_lines.append(
@@ -130,7 +143,6 @@ def post_results(target_date: str | None = None) -> None:
                 Game.game_date <= score_date,
                 NrfiFeatures.nrfi_label.isnot(None),
                 NrfiFeatures.p_nrfi_model.isnot(None),
-                NrfiFeatures.p_nrfi_market.isnot(None),
             )
             .all()
         )
@@ -139,7 +151,10 @@ def post_results(target_date: str | None = None) -> None:
         season_val_w = season_val_l = 0
 
         for game, feat in season_rows:
-            edge = feat.p_nrfi_model - feat.p_nrfi_market
+            p_market = _get_p_market(feat, db)
+            if p_market is None:
+                continue
+            edge = feat.p_nrfi_model - p_market
             if edge <= 0:
                 continue
             won = bool(feat.nrfi_label)
@@ -178,6 +193,7 @@ def post_results(target_date: str | None = None) -> None:
                 "inline": True,
             },
         ],
+        "footer": {"text": "Edge = model's NRFI% minus market's implied NRFI%. A pick is taken when edge > 0."},
     }
 
     try:
