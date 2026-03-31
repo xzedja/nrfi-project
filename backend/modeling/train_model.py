@@ -106,14 +106,28 @@ FEATURE_COLS = [
     # Game-specific lineup strength (prior-season avg OBP of starting 9)
     "home_lineup_obp",
     "away_lineup_obp",
+    # Interaction features (derived at load time)
+    "park_x_wind_out",       # park_factor × wind_out_mph  — park + wind together
+    "home_sp_era_minus_away", # home_sp_era − away_sp_era  — relative pitcher quality
+    "lineup_obp_diff",        # away_lineup_obp − home_lineup_obp — net offensive matchup
 ]
+
+# Date boundaries for train/val/test split
+_TRAIN_END_YEAR  = 2021   # train on 2015–2021
+_VAL_YEAR        = 2022   # validate on 2022
+_TEST_START_YEAR = 2023   # test on 2023–2024
 
 
 def load_feature_dataframe() -> pd.DataFrame:
     """
     Load NrfiFeatures joined with Game.game_date from the DB.
-    Returns a DataFrame sorted chronologically.
+    Returns a DataFrame sorted chronologically with interaction features added.
     """
+    # Base DB columns (exclude interaction features — those are derived)
+    _BASE_COLS = [c for c in FEATURE_COLS if c not in (
+        "park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"
+    )]
+
     db = SessionLocal()
     try:
         rows = (
@@ -129,21 +143,48 @@ def load_feature_dataframe() -> pd.DataFrame:
     records = []
     for feat, game_date in rows:
         record: dict[str, Any] = {"game_date": game_date, "nrfi_label": feat.nrfi_label}
-        for col in FEATURE_COLS:
+        for col in _BASE_COLS:
             record[col] = getattr(feat, col, None)
         records.append(record)
 
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+
+    # Derived interaction features (NaN-safe — NaN propagates when either input is NaN)
+    df["park_x_wind_out"]        = df["park_factor"] * df["wind_out_mph"]
+    df["home_sp_era_minus_away"] = df["home_sp_era"] - df["away_sp_era"]
+    df["lineup_obp_diff"]        = df["away_lineup_obp"] - df["home_lineup_obp"]
+
+    return df
 
 
-def chronological_split(
-    df: pd.DataFrame, val_frac: float = 0.10, test_frac: float = 0.10
+def _audit_nrfi_rates(df: pd.DataFrame) -> None:
+    """Log NRFI rate by season — sanity check that labels look correct."""
+    df = df.copy()
+    df["year"] = pd.to_datetime(df["game_date"]).dt.year
+    logger.info("--- NRFI Rate Audit by Season ---")
+    for year, grp in df.groupby("year"):
+        rate = grp["nrfi_label"].mean()
+        n = len(grp)
+        logger.info("  %d:  %.1f%% NRFI  (%d games)", year, rate * 100, n)
+    overall = df["nrfi_label"].mean()
+    logger.info("  Overall: %.1f%% NRFI  (%d games)", overall * 100, len(df))
+
+
+def date_based_split(
+    df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split df into train / val / test by time order (no shuffling)."""
-    n = len(df)
-    test_start = int(n * (1 - test_frac))
-    val_start = int(n * (1 - test_frac - val_frac))
-    return df.iloc[:val_start], df.iloc[val_start:test_start], df.iloc[test_start:]
+    """
+    Split by fixed year boundaries to match realistic forward-in-time deployment.
+
+    Train : 2015–2021
+    Val   : 2022
+    Test  : 2023–present
+    """
+    years = pd.to_datetime(df["game_date"]).dt.year
+    train = df[years <= _TRAIN_END_YEAR]
+    val   = df[years == _VAL_YEAR]
+    test  = df[years >= _TEST_START_YEAR]
+    return train, val, test
 
 
 def evaluate(label: str, model: Any, X: pd.DataFrame, y: pd.Series) -> dict[str, float]:
@@ -176,10 +217,14 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     if len(df) < 100:
         raise ValueError("Not enough labeled data to train. Run the backfill first.")
 
-    train_df, val_df, test_df = chronological_split(df)
+    _audit_nrfi_rates(df)
+
+    train_df, val_df, test_df = date_based_split(df)
     logger.info(
-        "Split — train: %d  |  val: %d  |  test: %d",
-        len(train_df), len(val_df), len(test_df),
+        "Split — train: %d (%d–%d)  |  val: %d (%d)  |  test: %d (%d–%d)",
+        len(train_df), _TRAIN_END_YEAR - 6, _TRAIN_END_YEAR,
+        len(val_df),   _VAL_YEAR,
+        len(test_df),  _TEST_START_YEAR, pd.to_datetime(df["game_date"]).dt.year.max(),
     )
 
     X_train = train_df[FEATURE_COLS]
