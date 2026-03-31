@@ -1,17 +1,19 @@
 """
 scripts/backfill_historical_odds.py
 
-Backfills NRFI/YRFI first-inning odds for historical games using The Odds API
-historical snapshot endpoint (/v4/sports/baseball_mlb/odds-history).
+Backfills NRFI/YRFI first-inning odds for historical games using The Odds API.
 
-Historical period market data (including 1st inning) is available from
-May 3, 2023 onwards at 5-minute snapshot intervals.
+The batch /odds-history endpoint does NOT support period markets like
+totals_1st_1_innings. We use a two-step approach instead:
+  1. GET /events  — list event IDs for the game date (1 credit/date)
+  2. GET /events/{id}/odds?date=snapshot  — period market odds per event
 
+Historical period market data is available from May 3, 2023 onwards.
 Queries at 17:00 UTC (noon ET) each game day to capture pre-game lines.
-Stores results in the Odds table and updates nrfi_features.p_nrfi_market.
 
-Credit cost: ~1 request per game date. With ~600 game dates since May 2023,
-expect ~600-1,800 credits total.
+Credit cost: ~1 (events list) + N per game day, where N = games that day.
+With ~15 games/day × ~600 dates = ~9,600 total credits (plus events calls).
+Credit counter is printed after each date.
 
 Usage:
     python scripts/backfill_historical_odds.py
@@ -29,7 +31,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import requests
-from sqlalchemy import extract
 
 sys.path.insert(0, ".")
 
@@ -46,24 +47,55 @@ from backend.data.fetch_odds import (
 from backend.db.models import Game, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
 
-_HISTORY_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds-history"
+_EVENTS_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb/events"
+_EVENT_ODDS_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds"
 _REQUEST_TIMEOUT = 15
-_DELAY_SECS = 1.0  # polite delay between requests
+_DELAY_SECS = 0.5  # polite delay between per-event requests
 
 
-def _fetch_historical_nrfi(date_str: str) -> list[dict[str, Any]]:
+def _fetch_event_ids_for_date(date_str: str) -> list[dict[str, Any]]:
     """
-    Query the historical odds snapshot at noon ET (17:00 UTC) for the given date.
-
-    Returns a list of game dicts from the 'data' key, each with bookmakers
-    containing totals_1st_1_innings market data.
+    Fetch The Odds API event list for games commencing on the given date.
+    Returns list of {id, home_team, away_team, commence_time} dicts.
     """
-    snapshot_ts = f"{date_str}T17:00:00Z"
     settings = get_settings()
+    next_date = (datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
 
     try:
         resp = requests.get(
-            _HISTORY_URL,
+            _EVENTS_URL,
+            params={
+                "apiKey": settings.odds_api_key,
+                "commenceTimeFrom": f"{date_str}T00:00:00Z",
+                "commenceTimeTo": f"{next_date}T12:00:00Z",
+            },
+            timeout=_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        remaining = resp.headers.get("x-requests-remaining", "?")
+        used = resp.headers.get("x-requests-used", "?")
+        events = resp.json()
+        logger.info(
+            "  %s — %d events found  [used: %s  remaining: %s]",
+            date_str, len(events), used, remaining,
+        )
+        return events
+    except requests.RequestException as exc:
+        logger.warning("  Failed to fetch events for %s: %s", date_str, exc)
+        return []
+
+
+def _fetch_event_nrfi_odds(event_id: str, date_str: str) -> dict[str, Any] | None:
+    """
+    Fetch first-inning odds for a single event at the noon-ET (17:00 UTC) snapshot.
+    Returns the event dict with bookmakers, or None if unavailable.
+    """
+    settings = get_settings()
+    snapshot_ts = f"{date_str}T17:00:00Z"
+
+    try:
+        resp = requests.get(
+            _EVENT_ODDS_URL.format(event_id=event_id),
             params={
                 "apiKey": settings.odds_api_key,
                 "regions": "us",
@@ -73,24 +105,23 @@ def _fetch_historical_nrfi(date_str: str) -> list[dict[str, Any]]:
             },
             timeout=_REQUEST_TIMEOUT,
         )
+        if resp.status_code in (404, 422):
+            # Market not available for this event / snapshot
+            return None
         resp.raise_for_status()
-        remaining = resp.headers.get("x-requests-remaining", "?")
-        used = resp.headers.get("x-requests-used", "?")
-        logger.info("  %s — API credits used: %s  remaining: %s", date_str, used, remaining)
-        data = resp.json()
-        return data.get("data", [])
+        return resp.json()
     except requests.RequestException as exc:
-        logger.warning("  Failed to fetch historical odds for %s: %s", date_str, exc)
-        return []
+        logger.debug("  Event %s odds fetch failed: %s", event_id, exc)
+        return None
 
 
-def _parse_nrfi_from_game(game_data: dict) -> dict[str, int | None]:
+def _parse_nrfi_from_event(event_data: dict) -> dict[str, int | None]:
     """
-    Extract NRFI (Under 0.5) and YRFI (Over 0.5) American odds from a game dict.
+    Extract NRFI (Under 0.5) and YRFI (Over 0.5) American odds from an event dict.
     Uses preferred bookmaker order, falls back to any available.
     """
     bm_odds: dict[str, dict] = {}
-    for bm in game_data.get("bookmakers", []):
+    for bm in event_data.get("bookmakers", []):
         for market in bm.get("markets", []):
             if market["key"] != "totals_1st_1_innings":
                 continue
@@ -121,7 +152,7 @@ def _match_game(
 ) -> Game | None:
     """
     Match an Odds API game (full team names) to a DB Game row (abbreviations).
-    Tries exact match first, then partial.
+    Tries exact match first, then partial substring match.
     """
     home_abbrev = _TEAM_NAME_TO_ABBREV.get(home_full)
     away_abbrev = _TEAM_NAME_TO_ABBREV.get(away_full)
@@ -131,7 +162,7 @@ def _match_game(
         if game:
             return game
 
-    # Fuzzy fallback: check if any known name is a substring
+    # Fuzzy fallback
     for full, abbrev in _TEAM_NAME_TO_ABBREV.items():
         if full in home_full or home_full in full:
             home_abbrev = abbrev
@@ -146,7 +177,6 @@ def process_date(date_str: str, db, dry_run: bool = False) -> int:
     Fetch and store historical NRFI odds for a single game date.
     Returns number of games updated.
     """
-    # Load DB games for this date
     games = db.query(Game).filter(Game.game_date == date_str).all()
     if not games:
         return 0
@@ -159,22 +189,29 @@ def process_date(date_str: str, db, dry_run: bool = False) -> int:
         logger.info("  [dry-run] %s — %d games in DB", date_str, len(games))
         return 0
 
-    odds_data = _fetch_historical_nrfi(date_str)
-    if not odds_data:
-        logger.info("  %s — no odds data returned", date_str)
+    # Step 1: get event IDs for this date
+    events = _fetch_event_ids_for_date(date_str)
+    if not events:
         return 0
 
     updated = 0
-    for game_data in odds_data:
-        home_full = game_data.get("home_team", "")
-        away_full = game_data.get("away_team", "")
+    for event in events:
+        event_id = event.get("id")
+        home_full = event.get("home_team", "")
+        away_full = event.get("away_team", "")
 
         game = _match_game(home_full, away_full, db_games)
         if game is None:
             logger.debug("  No DB match for %s @ %s on %s", away_full, home_full, date_str)
             continue
 
-        nrfi = _parse_nrfi_from_game(game_data)
+        # Step 2: fetch period market odds at the historical snapshot
+        time.sleep(_DELAY_SECS)
+        event_data = _fetch_event_nrfi_odds(event_id, date_str)
+        if event_data is None:
+            continue
+
+        nrfi = _parse_nrfi_from_event(event_data)
         over_odds = nrfi["over_odds"]
         under_odds = nrfi["under_odds"]
 
@@ -207,7 +244,7 @@ def process_date(date_str: str, db, dry_run: bool = False) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Backfill historical NRFI odds from The Odds API."
+        description="Backfill historical NRFI odds from The Odds API (two-step: events → per-event odds)."
     )
     parser.add_argument(
         "--start", default="2023-05-03",
@@ -228,7 +265,6 @@ def main() -> None:
 
     db = SessionLocal()
     try:
-        # Get all game dates in range that have DB rows
         all_games = (
             db.query(Game.game_date)
             .filter(Game.game_date >= start, Game.game_date <= end)
@@ -251,14 +287,11 @@ def main() -> None:
     total_updated = 0
     db = SessionLocal()
     try:
-        for i, date_str in enumerate(game_dates):
+        for date_str in game_dates:
             updated = process_date(date_str, db, dry_run=args.dry_run)
             total_updated += updated
             if updated:
                 logger.info("  %s — updated %d games", date_str, updated)
-
-            if not args.dry_run and i < len(game_dates) - 1:
-                time.sleep(_DELAY_SECS)
 
         logger.info("Done. Total games updated: %d", total_updated)
 
