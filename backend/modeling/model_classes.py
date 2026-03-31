@@ -115,12 +115,12 @@ class XGBModel(BaseEstimator, ClassifierMixin):
 
         self.clf_ = XGBClassifier(
             n_estimators=2000,
-            max_depth=4,
+            max_depth=3,
             learning_rate=0.005,
             subsample=0.7,
             colsample_bytree=0.6,
-            min_child_weight=30,
-            gamma=0.3,
+            min_child_weight=60,
+            gamma=0.5,
             reg_alpha=0.3,
             reg_lambda=2.0,
             eval_metric="logloss",
