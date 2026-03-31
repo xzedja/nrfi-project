@@ -16,10 +16,10 @@ Hybrid backfill of p_nrfi_market for historical games:
     - Poisson approximation: p_nrfi = exp(-2 * (total/18) * 0.74)
     - Cost: ~1 credit/day
 
-Credit estimate:
-  - 100 recent days:  ~15,100 credits
-  - All older days:   ~600 credits (Poisson only)
-  - Total:            ~15,700 credits
+Credit estimate (correct /historical/ endpoint costs 10 credits/call):
+  - 100 recent days:  ~15,100 credits  (1 events + 15×10 per-event)
+  - ~500 older days:  ~5,000 credits   (10 credits/day for totals)
+  - Total:            ~20,100 credits
 
 Blend weight rationale (80/20):
   Actual NRFI lines are the market clearing price and are ~4x more
@@ -60,9 +60,9 @@ from backend.data.fetch_odds import (
 from backend.db.models import Game, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
 
-_HISTORY_URL     = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds-history"
-_EVENTS_URL      = "https://api.the-odds-api.com/v4/sports/baseball_mlb/events"
-_EVENT_ODDS_URL  = "https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds"
+_HISTORY_URL     = "https://api.the-odds-api.com/v4/historical/sports/baseball_mlb/odds"
+_EVENTS_URL      = "https://api.the-odds-api.com/v4/historical/sports/baseball_mlb/events"
+_EVENT_ODDS_URL  = "https://api.the-odds-api.com/v4/historical/sports/baseball_mlb/events/{event_id}/odds"
 _REQUEST_TIMEOUT = 15
 _DELAY_SECS      = 0.5
 
@@ -100,7 +100,8 @@ def _fetch_historical_totals(date_str: str) -> list[dict[str, Any]]:
         remaining = resp.headers.get("x-requests-remaining", "?")
         used      = resp.headers.get("x-requests-used", "?")
         logger.info("  [poisson] %s — used: %s  remaining: %s", date_str, used, remaining)
-        return resp.json().get("data", [])
+        body = resp.json()
+        return body.get("data", body) if isinstance(body, dict) else body
     except requests.RequestException as exc:
         logger.warning("  [poisson] %s fetch failed: %s", date_str, exc)
         return []
@@ -148,7 +149,8 @@ def _fetch_event_ids_at_snapshot(date_str: str) -> list[dict[str, Any]]:
         resp.raise_for_status()
         remaining = resp.headers.get("x-requests-remaining", "?")
         used      = resp.headers.get("x-requests-used", "?")
-        events = resp.json()
+        body = resp.json()
+        events = body.get("data", body) if isinstance(body, dict) else body
         logger.info(
             "  [actual] %s — %d events  used: %s  remaining: %s",
             date_str, len(events), used, remaining,
@@ -177,7 +179,9 @@ def _fetch_event_nrfi_odds(event_id: str, date_str: str) -> dict[str, Any] | Non
         if resp.status_code in (404, 422):
             return None
         resp.raise_for_status()
-        return resp.json()
+        body = resp.json()
+        # Historical endpoint wraps game in {"data": {...}}
+        return body.get("data", body) if isinstance(body, dict) and "data" in body else body
     except requests.RequestException as exc:
         logger.debug("  [actual] event %s odds failed: %s", event_id, exc)
         return None
