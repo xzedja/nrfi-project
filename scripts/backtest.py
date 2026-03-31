@@ -61,6 +61,7 @@ def run_backtest(
     start_year: int = 2022,
     end_year: int = 2025,
     min_edge: float = 0.0,
+    real_odds_only: bool = False,
 ) -> None:
     import pandas as pd
 
@@ -100,6 +101,8 @@ def run_backtest(
         "Backtest: %d–%d  |  %d labeled games  |  %d with actual NRFI odds",
         start_year, end_year, len(rows), len(nrfi_odds_map),
     )
+    if real_odds_only:
+        logger.info("--real-odds-only: restricting to games with actual NRFI lines in Odds table")
 
     # -----------------------------------------------------------------------
     # Batch predict using current model on stored features
@@ -133,6 +136,11 @@ def run_backtest(
         p_model = float(p_model_arr[i])
 
         # Resolve market probability
+        has_real_odds = game.id in nrfi_odds_map
+        if real_odds_only and not has_real_odds:
+            no_market += 1
+            continue
+
         p_market = feat.p_nrfi_market
         if p_market is None:
             odds_row_raw = nrfi_odds_map.get(game.id)
@@ -265,8 +273,11 @@ def main() -> None:
     parser.add_argument("--end",   type=int, default=2025, help="End year (default: 2025)")
     parser.add_argument("--min-edge", type=float, default=0.0,
                         help="Minimum edge to place a bet, as decimal (default: 0.0 = all positive edges)")
+    parser.add_argument("--real-odds-only", action="store_true",
+                        help="Only include games with actual NRFI lines (no Poisson approximation)")
     args = parser.parse_args()
-    run_backtest(start_year=args.start, end_year=args.end, min_edge=args.min_edge)
+    run_backtest(start_year=args.start, end_year=args.end, min_edge=args.min_edge,
+                 real_odds_only=args.real_odds_only)
 
 
 if __name__ == "__main__":
