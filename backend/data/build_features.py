@@ -48,6 +48,11 @@ _HIT_WALK_EVENTS = frozenset({
     "walk", "hit_by_pitch",
 })
 
+# First-inning specific event sets
+_STRIKEOUT_EVENTS = frozenset({"strikeout", "strikeout_double_play"})
+_WALK_EVENTS      = frozenset({"walk", "hit_by_pitch"})
+_HARD_CONTACT_MPH = 95.0  # exit velocity threshold for hard contact
+
 
 # ---------------------------------------------------------------------------
 # SP prior-season stats (Fangraphs)
@@ -372,8 +377,9 @@ def _precompute_pitcher_starts(season_df: pd.DataFrame) -> dict[int, pd.DataFram
         runs_allowed     : total runs scored across all innings pitched
         avg_velo         : mean release_speed for the start (None if unavailable)
     """
-    has_velo = "release_speed" in season_df.columns
+    has_velo   = "release_speed" in season_df.columns
     has_events = "events" in season_df.columns
+    has_launch = "launch_speed" in season_df.columns
 
     results: dict[int, pd.DataFrame] = {}
 
@@ -408,13 +414,31 @@ def _precompute_pitcher_starts(season_df: pd.DataFrame) -> dict[int, pd.DataFram
                 if not velo.empty:
                     avg_velo = float(velo.mean())
 
+            # First-inning K%, BB%, hard contact (inning 1 only)
+            first_inn_k = first_inn_bb = first_inn_bf = 0
+            first_inn_hard = first_inn_bip = 0
+            if has_events and not inn1.empty:
+                end_ab_inn1 = inn1[inn1["events"].notna()]
+                first_inn_bf = len(end_ab_inn1)
+                first_inn_k  = int(end_ab_inn1["events"].isin(_STRIKEOUT_EVENTS).sum())
+                first_inn_bb = int(end_ab_inn1["events"].isin(_WALK_EVENTS).sum())
+                if has_launch:
+                    bip = inn1[inn1["launch_speed"].notna()]
+                    first_inn_bip  = len(bip)
+                    first_inn_hard = int((bip["launch_speed"] >= _HARD_CONTACT_MPH).sum())
+
             starts.append({
-                "game_date": game_date,
+                "game_date":      game_date,
                 "first_inn_runs": first_inn_runs,
-                "ip_half": ip_half,
-                "hits_walks": hits_walks,
-                "runs_allowed": total_runs,
-                "avg_velo": avg_velo,
+                "ip_half":        ip_half,
+                "hits_walks":     hits_walks,
+                "runs_allowed":   total_runs,
+                "avg_velo":       avg_velo,
+                "first_inn_k":    first_inn_k,
+                "first_inn_bb":   first_inn_bb,
+                "first_inn_bf":   first_inn_bf,
+                "first_inn_hard": first_inn_hard,
+                "first_inn_bip":  first_inn_bip,
             })
 
         if starts:
@@ -443,7 +467,10 @@ def _pitcher_rolling_features(
         velo_trend      : last-start avg velo minus n-start avg (negative = declining)
         days_rest       : days since most recent prior start (None if first start of season)
     """
-    _null = {k: None for k in ("last5_era", "last5_whip", "first_inn_era", "avg_velo", "velo_trend", "days_rest")}
+    _null = {k: None for k in (
+        "last5_era", "last5_whip", "first_inn_era", "avg_velo", "velo_trend", "days_rest",
+        "first_inn_k_pct", "first_inn_bb_pct", "first_inn_hard_pct",
+    )}
 
     if starts_df is None or starts_df.empty:
         return _null
@@ -490,13 +517,27 @@ def _pitcher_rolling_features(
     except Exception:
         pass
 
+    # First-inning K%, BB%, hard contact% (season-to-date prior starts)
+    first_inn_k_pct = first_inn_bb_pct = first_inn_hard_pct = None
+    if "first_inn_bf" in prior.columns:
+        total_bf = float(prior["first_inn_bf"].sum())
+        if total_bf > 0:
+            first_inn_k_pct  = round(float(prior["first_inn_k"].sum())  / total_bf, 4)
+            first_inn_bb_pct = round(float(prior["first_inn_bb"].sum()) / total_bf, 4)
+        total_bip = float(prior["first_inn_bip"].sum())
+        if total_bip > 0:
+            first_inn_hard_pct = round(float(prior["first_inn_hard"].sum()) / total_bip, 4)
+
     return {
-        "last5_era": last5_era,
-        "last5_whip": last5_whip,
-        "first_inn_era": fi_era,
-        "avg_velo": avg_velo,
-        "velo_trend": velo_trend,
-        "days_rest": days_rest,
+        "last5_era":          last5_era,
+        "last5_whip":         last5_whip,
+        "first_inn_era":      fi_era,
+        "avg_velo":           avg_velo,
+        "velo_trend":         velo_trend,
+        "days_rest":          days_rest,
+        "first_inn_k_pct":    first_inn_k_pct,
+        "first_inn_bb_pct":   first_inn_bb_pct,
+        "first_inn_hard_pct": first_inn_hard_pct,
     }
 
 
@@ -853,6 +894,13 @@ def build_features_for_season(season: int) -> None:
                 away_sp_avg_velo=a_roll["avg_velo"],
                 away_sp_velo_trend=a_roll["velo_trend"],
                 away_sp_days_rest=a_roll["days_rest"],
+
+                home_sp_first_inn_k_pct=h_roll["first_inn_k_pct"],
+                home_sp_first_inn_bb_pct=h_roll["first_inn_bb_pct"],
+                home_sp_first_inn_hard_pct=h_roll["first_inn_hard_pct"],
+                away_sp_first_inn_k_pct=a_roll["first_inn_k_pct"],
+                away_sp_first_inn_bb_pct=a_roll["first_inn_bb_pct"],
+                away_sp_first_inn_hard_pct=a_roll["first_inn_hard_pct"],
 
                 # Team offense features
                 home_team_first_inn_runs_per_game=ht.get("first_inn_runs_scored_per_game"),

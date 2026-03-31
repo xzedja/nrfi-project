@@ -37,7 +37,8 @@ def _get_model():
 def _features_to_series(feat: NrfiFeatures) -> pd.DataFrame:
     """Convert a NrfiFeatures ORM row into a single-row DataFrame for the model."""
     _DERIVED = {"park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"}
-    row = {col: getattr(feat, col) for col in FEATURE_COLS if col not in _DERIVED}
+    # All other FEATURE_COLS are DB columns on NrfiFeatures (including p_nrfi_market)
+    row = {col: getattr(feat, col, None) for col in FEATURE_COLS if col not in _DERIVED}
 
     # Compute interaction features (same logic as train_model.load_feature_dataframe)
     row["park_x_wind_out"]        = (feat.park_factor or 0) * (feat.wind_out_mph or 0) if feat.park_factor is not None and feat.wind_out_mph is not None else None

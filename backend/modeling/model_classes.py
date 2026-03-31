@@ -43,8 +43,13 @@ class SeasonStartImputer(BaseEstimator, TransformerMixin):
         ("away_sp_last5_whip",    "away_sp_whip"),
         ("away_sp_first_inn_era", "away_sp_era"),
         # Lineup OBP fallback: use prior-season team OBP if game-specific lineup is unavailable
-        ("home_lineup_obp",       "home_team_obp"),
-        ("away_lineup_obp",       "away_team_obp"),
+        ("home_lineup_obp",            "home_team_obp"),
+        ("away_lineup_obp",            "away_team_obp"),
+        # First-inning K%/BB% fallback: use full-game prior-season rates if no in-season starts yet
+        ("home_sp_first_inn_k_pct",    "home_sp_k_pct"),
+        ("home_sp_first_inn_bb_pct",   "home_sp_bb_pct"),
+        ("away_sp_first_inn_k_pct",    "away_sp_k_pct"),
+        ("away_sp_first_inn_bb_pct",   "away_sp_bb_pct"),
     ]
     # Velocity trend: no starts yet → neutral (0 = no change)
     ZERO_COLS = ["home_sp_velo_trend", "away_sp_velo_trend"]

@@ -107,15 +107,26 @@ FEATURE_COLS = [
     "home_lineup_obp",
     "away_lineup_obp",
     # Interaction features (derived at load time)
-    "park_x_wind_out",       # park_factor × wind_out_mph  — park + wind together
+    "park_x_wind_out",        # park_factor × wind_out_mph  — park + wind together
     "home_sp_era_minus_away", # home_sp_era − away_sp_era  — relative pitcher quality
     "lineup_obp_diff",        # away_lineup_obp − home_lineup_obp — net offensive matchup
+    # First-inning specific Statcast features (season-to-date prior starts)
+    "home_sp_first_inn_k_pct",
+    "home_sp_first_inn_bb_pct",
+    "home_sp_first_inn_hard_pct",
+    "away_sp_first_inn_k_pct",
+    "away_sp_first_inn_bb_pct",
+    "away_sp_first_inn_hard_pct",
+    # Market prior — vig-removed implied P(NRFI) from bookmaker line (NULL → imputed to median)
+    "p_nrfi_market",
 ]
 
 # Date boundaries for train/val/test split
-_TRAIN_END_YEAR  = 2021   # train on 2015–2021
-_VAL_YEAR        = 2022   # validate on 2022
-_TEST_START_YEAR = 2023   # test on 2023–2024
+# 2020+ = modern baseball era (opener usage, shifted offenses, post-COVID)
+_TRAIN_START_YEAR = 2020
+_TRAIN_END_YEAR   = 2022   # train on 2020–2022
+_VAL_YEAR         = 2023   # validate on 2023
+_TEST_START_YEAR  = 2024   # test on 2024–present
 
 
 def load_feature_dataframe() -> pd.DataFrame:
@@ -123,17 +134,19 @@ def load_feature_dataframe() -> pd.DataFrame:
     Load NrfiFeatures joined with Game.game_date from the DB.
     Returns a DataFrame sorted chronologically with interaction features added.
     """
-    # Base DB columns (exclude interaction features — those are derived)
-    _BASE_COLS = [c for c in FEATURE_COLS if c not in (
-        "park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"
-    )]
+    # Base DB columns (exclude derived interaction features)
+    _DERIVED = {"park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"}
+    _BASE_COLS = [c for c in FEATURE_COLS if c not in _DERIVED]
 
     db = SessionLocal()
     try:
         rows = (
             db.query(NrfiFeatures, Game.game_date)
             .join(Game, NrfiFeatures.game_id == Game.id)
-            .filter(NrfiFeatures.nrfi_label.isnot(None))
+            .filter(
+                NrfiFeatures.nrfi_label.isnot(None),
+                Game.game_date >= f"{_TRAIN_START_YEAR}-01-01",
+            )
             .order_by(Game.game_date)
             .all()
         )
@@ -176,12 +189,12 @@ def date_based_split(
     """
     Split by fixed year boundaries to match realistic forward-in-time deployment.
 
-    Train : 2015–2021
-    Val   : 2022
-    Test  : 2023–present
+    Train : 2020–2022  (modern era only)
+    Val   : 2023
+    Test  : 2024–present
     """
     years = pd.to_datetime(df["game_date"]).dt.year
-    train = df[years <= _TRAIN_END_YEAR]
+    train = df[(years >= _TRAIN_START_YEAR) & (years <= _TRAIN_END_YEAR)]
     val   = df[years == _VAL_YEAR]
     test  = df[years >= _TEST_START_YEAR]
     return train, val, test
@@ -222,7 +235,7 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     train_df, val_df, test_df = date_based_split(df)
     logger.info(
         "Split — train: %d (%d–%d)  |  val: %d (%d)  |  test: %d (%d–%d)",
-        len(train_df), _TRAIN_END_YEAR - 6, _TRAIN_END_YEAR,
+        len(train_df), _TRAIN_START_YEAR, _TRAIN_END_YEAR,
         len(val_df),   _VAL_YEAR,
         len(test_df),  _TEST_START_YEAR, pd.to_datetime(df["game_date"]).dt.year.max(),
     )

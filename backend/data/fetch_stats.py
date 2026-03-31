@@ -42,6 +42,7 @@ _STATCAST_COLS = [
     "post_bat_score",
     "release_speed",   # for velocity trend features
     "events",          # for WHIP computation (hits + walks per IP)
+    "launch_speed",    # for first-inning hard contact rate (≥95 mph threshold)
 ]
 
 
