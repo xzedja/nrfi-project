@@ -71,29 +71,17 @@ def main():
     d = args.date
     snapshot = f"{d}T17:00:00Z"
 
-    # 1. Standard events endpoint with date snapshot param
-    probe(
-        "Events endpoint with date= snapshot",
-        f"{_BASE}/sports/baseball_mlb/events",
+    # 1. CORRECT historical events endpoint (with /historical/ prefix + date param)
+    events_data = probe(
+        "HISTORICAL events endpoint (/historical/sports/.../events?date=)",
+        f"{_BASE}/historical/sports/baseball_mlb/events",
         {"date": snapshot},
     )
 
-    # 2. Events endpoint with commenceTimeFrom/To
-    from datetime import datetime, timedelta
-    next_d = (datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-    probe(
-        "Events endpoint with commenceTimeFrom/To",
-        f"{_BASE}/sports/baseball_mlb/events",
-        {
-            "commenceTimeFrom": f"{d}T00:00:00Z",
-            "commenceTimeTo":   f"{next_d}T12:00:00Z",
-        },
-    )
-
-    # 3. Odds-history with totals (should work — standard market)
-    data = probe(
-        "odds-history with markets=totals",
-        f"{_BASE}/sports/baseball_mlb/odds-history",
+    # 2. CORRECT historical featured odds (/historical/sports/.../odds with totals)
+    odds_data = probe(
+        "HISTORICAL odds endpoint (/historical/sports/.../odds?markets=totals)",
+        f"{_BASE}/historical/sports/baseball_mlb/odds",
         {
             "regions":    "us",
             "markets":    "totals",
@@ -102,10 +90,10 @@ def main():
         },
     )
 
-    # 4. Odds-history with totals_1st_1_innings (period market — known 422)
+    # 3. CORRECT historical featured odds with totals_1st_1_innings
     probe(
-        "odds-history with markets=totals_1st_1_innings",
-        f"{_BASE}/sports/baseball_mlb/odds-history",
+        "HISTORICAL odds endpoint with totals_1st_1_innings",
+        f"{_BASE}/historical/sports/baseball_mlb/odds",
         {
             "regions":    "us",
             "markets":    "totals_1st_1_innings",
@@ -114,20 +102,24 @@ def main():
         },
     )
 
-    # 5. If totals returned event data, try fetching period market odds for one event
+    # 4. Extract an event_id from whichever response has data, then test
+    #    the historical event-specific endpoint for NRFI period market
     event_id = None
-    if isinstance(data, dict):
-        items = data.get("data", [])
-        if items:
-            event_id = items[0].get("id")
-    elif isinstance(data, list) and data:
-        event_id = data[0].get("id")
+    for resp_data in [events_data, odds_data]:
+        if isinstance(resp_data, dict):
+            items = resp_data.get("data", [])
+            if items:
+                event_id = items[0].get("id")
+                break
+        elif isinstance(resp_data, list) and resp_data:
+            event_id = resp_data[0].get("id")
+            break
 
     if event_id:
-        print(f"\n>>> Found event_id from totals response: {event_id}")
+        print(f"\n>>> Found event_id: {event_id}")
         probe(
-            f"Event-specific odds (totals_1st_1_innings) with date= snapshot — event {event_id[:8]}...",
-            f"{_BASE}/sports/baseball_mlb/events/{event_id}/odds",
+            f"HISTORICAL event-specific odds (/historical/.../events/{{id}}/odds) — event {event_id[:8]}...",
+            f"{_BASE}/historical/sports/baseball_mlb/events/{event_id}/odds",
             {
                 "regions":    "us",
                 "markets":    "totals_1st_1_innings",
@@ -136,8 +128,8 @@ def main():
             },
         )
     else:
-        print("\n>>> No event_id found from totals response — skipping event-specific test")
-        print("    Try running with a date that has MLB games (April–October)")
+        print("\n>>> No event_id found — skipping event-specific test")
+        print("    Try a date with regular season MLB games (April–October)")
 
 
 if __name__ == "__main__":
