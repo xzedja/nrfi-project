@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 from backend.data.fetch_odds import american_to_implied, remove_vig
 from backend.db.models import Game, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
+from backend.modeling.model_store import DEFAULT_MODEL_PATH, load_model
+from backend.modeling.train_model import FEATURE_COLS
 
 
 # Default vig assumption when no actual NRFI odds are stored
@@ -60,6 +62,11 @@ def run_backtest(
     end_year: int = 2025,
     min_edge: float = 0.0,
 ) -> None:
+    import pandas as pd
+
+    # Load the current trained model
+    model = load_model(DEFAULT_MODEL_PATH)
+
     db = SessionLocal()
     try:
         rows = (
@@ -69,7 +76,6 @@ def run_backtest(
                 Game.game_date >= date(start_year, 1, 1),
                 Game.game_date <= date(end_year, 12, 31),
                 NrfiFeatures.nrfi_label.isnot(None),
-                NrfiFeatures.p_nrfi_model.isnot(None),
             )
             .order_by(Game.game_date)
             .all()
@@ -91,9 +97,31 @@ def run_backtest(
         db.close()
 
     logger.info(
-        "Backtest: %d–%d  |  %d games with labels+model  |  %d with actual NRFI odds",
+        "Backtest: %d–%d  |  %d labeled games  |  %d with actual NRFI odds",
         start_year, end_year, len(rows), len(nrfi_odds_map),
     )
+
+    # -----------------------------------------------------------------------
+    # Batch predict using current model on stored features
+    # Interaction features are derived the same way as train_model.py
+    # -----------------------------------------------------------------------
+    _BASE_COLS = [c for c in FEATURE_COLS if c not in (
+        "park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"
+    )]
+
+    records = []
+    for game, feat in rows:
+        rec: dict = {}
+        for col in _BASE_COLS:
+            rec[col] = getattr(feat, col, None)
+        records.append(rec)
+
+    feat_df = pd.DataFrame(records)
+    feat_df["park_x_wind_out"]        = feat_df["park_factor"] * feat_df["wind_out_mph"]
+    feat_df["home_sp_era_minus_away"] = feat_df["home_sp_era"] - feat_df["away_sp_era"]
+    feat_df["lineup_obp_diff"]        = feat_df["away_lineup_obp"] - feat_df["home_lineup_obp"]
+
+    p_model_arr = model.predict_proba(feat_df[FEATURE_COLS])[:, 1]
 
     # -----------------------------------------------------------------------
     # Per-game edge computation and bet simulation
@@ -101,7 +129,9 @@ def run_backtest(
     bets: list[dict] = []
     no_market = 0
 
-    for game, feat in rows:
+    for i, (game, feat) in enumerate(rows):
+        p_model = float(p_model_arr[i])
+
         # Resolve market probability
         p_market = feat.p_nrfi_market
         if p_market is None:
@@ -109,12 +139,11 @@ def run_backtest(
             if odds_row_raw is None:
                 no_market += 1
                 continue
-            # We only have NRFI under odds — use default for over to remove vig
             p_nrfi_raw = american_to_implied(odds_row_raw)
             p_yrfi_raw = 1.0 - p_nrfi_raw + 0.04  # approximate vig
             _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
 
-        edge = feat.p_nrfi_model - p_market
+        edge = p_model - p_market
         if edge < min_edge:
             continue
 
@@ -124,13 +153,13 @@ def run_backtest(
         won = bool(feat.nrfi_label)
 
         bets.append({
-            "date":    game.game_date,
-            "edge":    edge,
-            "p_model": feat.p_nrfi_model,
+            "date":     game.game_date,
+            "edge":     edge,
+            "p_model":  p_model,
             "p_market": p_market,
-            "won":     won,
-            "payout":  payout,
-            "profit":  payout if won else -1.0,
+            "won":      won,
+            "payout":   payout,
+            "profit":   payout if won else -1.0,
         })
 
     if no_market:
@@ -193,10 +222,8 @@ def run_backtest(
     logger.info("CALIBRATION CHECK (all games with market, not just bets)")
 
     cal_buckets: dict[str, list] = defaultdict(list)
-    for game, feat in rows:
-        p_model = feat.p_nrfi_model
-        if p_model is None:
-            continue
+    for i, (game, feat) in enumerate(rows):
+        p_model = float(p_model_arr[i])
         actual = int(feat.nrfi_label)
         bucket_label = f"{int(p_model * 100 // 5) * 5}-{int(p_model * 100 // 5) * 5 + 5}%"
         cal_buckets[bucket_label].append((p_model, actual))
