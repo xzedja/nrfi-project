@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 from backend.data.fetch_today import fetch_schedule
 from backend.data.build_features import build_features_for_season
+from backend.data.fetch_lineups import update_lineup_obp_for_date
 from backend.data.fetch_odds import fetch_and_store_odds
 from backend.db.models import Game, GamePitchers, GameUmpire, NrfiFeatures, Pitcher
 from backend.db.session import SessionLocal
@@ -144,6 +145,15 @@ def run_daily(target_date: str | None = None) -> None:
     season = int(target[:4])
     logger.info("Building features for season %s (new games only)...", season)
     build_features_for_season(season)
+
+    # -----------------------------------------------------------------------
+    # Step 3b: Fetch today's batting lineups and update lineup_obp
+    # -----------------------------------------------------------------------
+    logger.info("Fetching batting lineups for %s...", target)
+    try:
+        update_lineup_obp_for_date(target)
+    except Exception:
+        logger.warning("Lineup fetch failed — lineup_obp will be NULL for today's games.")
 
     # -----------------------------------------------------------------------
     # Step 4: Fetch odds and update p_nrfi_market

@@ -42,6 +42,9 @@ class SeasonStartImputer(BaseEstimator, TransformerMixin):
         ("away_sp_last5_era",     "away_sp_era"),
         ("away_sp_last5_whip",    "away_sp_whip"),
         ("away_sp_first_inn_era", "away_sp_era"),
+        # Lineup OBP fallback: use prior-season team OBP if game-specific lineup is unavailable
+        ("home_lineup_obp",       "home_team_obp"),
+        ("away_lineup_obp",       "away_team_obp"),
     ]
     # Velocity trend: no starts yet → neutral (0 = no change)
     ZERO_COLS = ["home_sp_velo_trend", "away_sp_velo_trend"]

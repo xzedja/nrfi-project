@@ -6,16 +6,19 @@ a logistic regression baseline.
 
 Features used (all pre-game, no leakage):
   Prior-season Fangraphs stats:
-    home_sp_era, home_sp_whip, home_sp_k_pct, home_sp_bb_pct, home_sp_hr9
-    away_sp_era, away_sp_whip, away_sp_k_pct, away_sp_bb_pct, away_sp_hr9
+    home_sp_era, home_sp_fip, home_sp_whip, home_sp_k_pct, home_sp_bb_pct, home_sp_hr9
+    away_sp_era, away_sp_fip, away_sp_whip, away_sp_k_pct, away_sp_bb_pct, away_sp_hr9
   Within-season rolling stats (last 5 starts):
     home_sp_last5_era, home_sp_last5_whip, home_sp_first_inn_era
-    home_sp_avg_velo, home_sp_velo_trend
+    home_sp_avg_velo, home_sp_velo_trend, home_sp_days_rest
     away_sp_last5_era, away_sp_last5_whip, away_sp_first_inn_era
-    away_sp_avg_velo, away_sp_velo_trend
-  Team and park:
-    home_team_first_inn_runs_per_game
-    away_team_first_inn_runs_per_game
+    away_sp_avg_velo, away_sp_velo_trend, away_sp_days_rest
+  Team offense:
+    home_team_first_inn_runs_per_game, away_team_first_inn_runs_per_game
+    home_team_obp, away_team_obp, home_team_slg, away_team_slg
+  Game-specific lineup strength (prior-season avg OBP of starting 9):
+    home_lineup_obp, away_lineup_obp
+  Park:
     park_factor
   Weather (None for dome parks, imputed to median):
     temperature_f, wind_speed_mph, wind_out_mph, is_dome
@@ -100,6 +103,9 @@ FEATURE_COLS = [
     "is_dome",
     # Umpire
     "ump_nrfi_rate_above_avg",
+    # Game-specific lineup strength (prior-season avg OBP of starting 9)
+    "home_lineup_obp",
+    "away_lineup_obp",
 ]
 
 

@@ -176,6 +176,10 @@ class NrfiFeatures(Base):
     home_sp_days_rest = Column(Float, nullable=True)
     away_sp_days_rest = Column(Float, nullable=True)
 
+    # Game-specific lineup strength (average OBP of starting lineup, prior-season stats)
+    home_lineup_obp = Column(Float, nullable=True)  # home batting order avg OBP
+    away_lineup_obp = Column(Float, nullable=True)  # away batting order avg OBP
+
     # Target and market probability
     nrfi_label = Column(Boolean, nullable=True)
     p_nrfi_model = Column(Float, nullable=True)

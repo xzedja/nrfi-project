@@ -29,6 +29,7 @@ sys.path.insert(0, ".")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+from backend.data.fetch_lineups import update_lineup_obp_for_date
 from backend.data.fetch_odds import fetch_and_store_odds
 from backend.db.models import Game, NrfiFeatures
 from backend.db.session import SessionLocal
@@ -72,6 +73,12 @@ def refresh(target_date: str | None = None) -> None:
     except Exception:
         logger.exception("Odds fetch failed — aborting refresh.")
         return
+
+    # Also refresh lineup OBP now that lineups are likely posted
+    try:
+        update_lineup_obp_for_date(target)
+    except Exception:
+        logger.warning("Lineup OBP refresh failed — continuing with odds update.")
 
     # Check which previously-empty games now have odds
     db = SessionLocal()
