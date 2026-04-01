@@ -313,7 +313,7 @@ def process_date_actual(date_str: str, db, dry_run: bool = False) -> int:
     return updated
 
 
-def process_date_hybrid(date_str: str, db, use_actual: bool, dry_run: bool = False) -> int:
+def process_date_hybrid(date_str: str, db, use_actual: bool, dry_run: bool = False, overwrite: bool = False) -> int:
     """
     Single entry point for both paths.
 
@@ -376,8 +376,10 @@ def process_date_hybrid(date_str: str, db, use_actual: bool, dry_run: bool = Fal
     updated = 0
     for (home_abbr, away_abbr), game in db_games.items():
         feat = db.query(NrfiFeatures).filter_by(game_id=game.id).first()
-        if feat is None or feat.p_nrfi_market is not None:
-            continue  # skip already-populated rows
+        if feat is None:
+            continue
+        if feat.p_nrfi_market is not None and not overwrite:
+            continue  # skip already-populated rows unless --overwrite
 
         key     = (home_abbr, away_abbr)
         p_act   = actual_by_game.get(key)
@@ -435,6 +437,8 @@ def main() -> None:
                         help="Number of most recent game days to use actual NRFI odds (default: 100)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show plan without making API calls")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Overwrite existing p_nrfi_market values (re-fetch actual odds)")
     args = parser.parse_args()
 
     start = date.fromisoformat(args.start)
@@ -483,7 +487,7 @@ def main() -> None:
         # Poisson path (cheap — older dates)
         logger.info("--- Poisson path (%d dates) ---", len(poisson_dates))
         for i, date_str in enumerate(poisson_dates):
-            updated = process_date_hybrid(date_str, db, use_actual=False, dry_run=args.dry_run)
+            updated = process_date_hybrid(date_str, db, use_actual=False, dry_run=args.dry_run, overwrite=args.overwrite)
             total_updated += updated
             if updated:
                 logger.info("  %s — updated %d games", date_str, updated)
@@ -493,7 +497,7 @@ def main() -> None:
         # Actual odds path (recent dates)
         logger.info("--- Actual+blend path (%d dates) ---", len(actual_dates))
         for date_str in actual_dates:
-            updated = process_date_hybrid(date_str, db, use_actual=True, dry_run=args.dry_run)
+            updated = process_date_hybrid(date_str, db, use_actual=True, dry_run=args.dry_run, overwrite=args.overwrite)
             total_updated += updated
             if updated:
                 logger.info("  %s — updated %d games", date_str, updated)
