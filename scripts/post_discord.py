@@ -69,7 +69,7 @@ _VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 
 _EDGE_ZERO_THRESHOLD = 0.001  # treat |edge| < 0.1% as effectively zero (early-season anchor)
 
 
-def _edge_color(edge: float | None) -> int:
+def _edge_color(edge: float | None, market: float | None = None) -> int:
     if edge is None:
         return _COLOR_GRAY
     if abs(edge) < _EDGE_ZERO_THRESHOLD:
@@ -78,6 +78,8 @@ def _edge_color(edge: float | None) -> int:
         return _COLOR_GREEN
     if edge > 0:
         return _COLOR_YELLOW
+    if market is not None and market >= 0.60:
+        return _COLOR_BLUE   # YRFI lean on heavy favorite
     return _COLOR_RED
 
 
@@ -91,11 +93,11 @@ def _recommendation(edge: float, model: float, market: float | None = None) -> s
         return f"🟢 **Model strongly favors NRFI** — {edge_pct} above market"
     elif edge > 0:
         return f"🟡 **Model leans NRFI** — slight disagreement with market"
-    elif market is not None and market >= 0.60 and edge <= -0.03:
+    elif market is not None and market >= 0.60:
         edge_pct_mkt = f"{market * 100:.0f}%"
         return (
-            f"📊 **Shadow YRFI** — market implies {edge_pct_mkt} NRFI but historical data "
-            f"shows heavy favorites go NRFI only ~48%. Tracking for 2026 analysis."
+            f"🔵 **Lean YRFI** — market prices NRFI at {edge_pct_mkt} but historically "
+            f"heavy favorites go NRFI only ~48–54%. Value may be on YRFI at these odds."
         )
     elif edge > -_VALUE_PLAY_THRESHOLD:
         return f"🟡 **Model leans YRFI** — market more confident in NRFI than model"
@@ -169,7 +171,7 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     embed: dict[str, Any] = {
         "title": title,
         "description": description,
-        "color": _edge_color(edge),
+        "color": _edge_color(edge, market),
     }
 
     logo_url = _team_logo_url(home)
@@ -186,8 +188,7 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
     anchored = sum(1 for p in preds if p.get("edge") is not None and abs(p["edge"]) < _EDGE_ZERO_THRESHOLD)
     shadow_yrfi = sum(
         1 for p in preds
-        if p.get("edge") is not None and p.get("p_nrfi_market") is not None
-        and p["p_nrfi_market"] >= 0.60 and p["edge"] <= -0.03
+        if p.get("p_nrfi_market") is not None and p["p_nrfi_market"] >= 0.60
     )
     no_lines = sum(1 for p in preds if p.get("edge") is None)
 
@@ -199,7 +200,7 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
     if anchored:
         parts.append(f"{anchored} anchored to market")
     if shadow_yrfi:
-        parts.append(f"📊 {shadow_yrfi} shadow YRFI")
+        parts.append(f"🔵 {shadow_yrfi} YRFI lean{'s' if shadow_yrfi != 1 else ''}")
     if no_lines:
         parts.append(f"{no_lines} no lines yet")
 

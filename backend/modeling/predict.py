@@ -89,29 +89,6 @@ def predict_for_game(game_id: int, db: Session) -> dict[str, Any] | None:
             _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
             p_market = round(p_market, 4)
 
-    # Market anchor blend: scale toward market probability when in-season data is sparse.
-    # Applies to ALL model types including DeltaModel.
-    #
-    # For CalibratedModel: blends raw p_model toward p_market.
-    # For DeltaModel: same formula; effectively scales the learned delta toward 0.
-    #   DeltaModel learns a systematic market correction (e.g. "market overprices NRFI
-    #   by ~5-7% on average"). When features are all NULL/imputed, that correction still
-    #   fires and applies to every game equally — which is wrong. We need to suppress it
-    #   until real in-season data confirms the correction is warranted for a specific pitcher.
-    #
-    # coverage = 0.0 → Opening Day, both pitchers NULL → trust market fully (edge = 0)
-    # coverage = 0.5 → one pitcher has data, one doesn't → blend 50/50
-    # coverage = 1.0 → both pitchers have in-season starts → use full model output
-    if p_market is not None:
-        h_has_data = feat.home_sp_last5_era is not None
-        a_has_data = feat.away_sp_last5_era is not None
-        in_season_coverage = (int(h_has_data) + int(a_has_data)) / 2.0
-        if in_season_coverage < 1.0:
-            p_model = in_season_coverage * p_model + (1.0 - in_season_coverage) * p_market
-            logger.debug(
-                "Game %d: market anchor blend (coverage=%.1f%%) → p_model=%.4f",
-                game_id, in_season_coverage * 100, p_model,
-            )
 
     edge = round(p_model - p_market, 4) if p_market is not None else None
 
