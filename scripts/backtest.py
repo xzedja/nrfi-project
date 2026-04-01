@@ -344,6 +344,29 @@ def run_backtest(
                     label, n, w, n - w, w / n * 100, r, avg_yrfi)
 
     # -----------------------------------------------------------------------
+    # YRFI year-by-year for heavy favorites only (market 60%+ NRFI implied)
+    # This is the out-of-sample check — 2024 is training data, 2025 is the test
+    # -----------------------------------------------------------------------
+    logger.info("")
+    logger.info("YRFI HEAVY FAVORITES (market 60%+ NRFI) — BY YEAR")
+    logger.info("  %-6s  %6s  %10s  %8s  %8s  %8s", "Year", "Bets", "Record", "Hit%", "ROI", "AvgYRFI")
+    logger.info("  " + "-" * 56)
+
+    heavy_flip = [b for b in flip_bets if b["p_market"] >= 0.60]
+    year_heavy: dict[int, list] = defaultdict(list)
+    for b in heavy_flip:
+        year_heavy[b["date"].year].append(b)
+
+    for year in sorted(year_heavy):
+        yb = year_heavy[year]
+        n = len(yb)
+        w = sum(1 for b in yb if b["won"])
+        r = sum(b["profit"] for b in yb) / n * 100
+        avg_yr = sum(b["yrfi_odds"] for b in yb) / n
+        logger.info("  %-6d  %6d  %5d-%-4d  %7.1f%%  %+7.2f%%  %+7.0f",
+                    year, n, w, n - w, w / n * 100, r, avg_yr)
+
+    # -----------------------------------------------------------------------
     # Calibration check: model%, market%, empirical% side by side
     # Bucketed by MARKET probability (the prior), not model probability
     # -----------------------------------------------------------------------
