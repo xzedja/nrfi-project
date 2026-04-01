@@ -6,8 +6,13 @@ Discord gateway bot for NRFI slash commands.
 Connects outbound to Discord — works behind CGNAT with no public URL required.
 
 Commands:
-  /today-record   — public embed showing today's picks W/L record
-  /display-picks  — ephemeral embed showing today's full picks (only visible to requester)
+  /display-picks   — ephemeral embed showing today's full picks (only visible to requester)
+  /today-record    — public embed showing today's picks W/L record
+  /tomorrow-picks  — ephemeral embed showing tomorrow's picks
+  /yrfi-signals    — ephemeral embed showing today's YRFI signal games (market 60%+ NRFI)
+  /season-record   — ephemeral embed showing season W/L for model picks + YRFI signal
+  /refresh-odds    — triggers odds refresh pipeline for today (ephemeral)
+  /yesterday-picks — ephemeral embed showing yesterday's results
 
 Usage:
     DATABASE_URL=... DISCORD_BOT_TOKEN=... python scripts/discord_bot.py
@@ -61,7 +66,9 @@ _COLOR_RED    = 0xE74C3C
 _COLOR_GRAY   = 0x95A5A6
 _COLOR_BLUE   = 0x3498DB
 
-_VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 100.0
+_VALUE_PLAY_THRESHOLD  = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 100.0
+_EDGE_ZERO_THRESHOLD   = 0.001
+_YRFI_SIGNAL_THRESHOLD = 0.60
 
 _ESPN_LOGO_BASE = "https://a.espncdn.com/i/teamlogos/mlb/500"
 _TEAM_ESPN_SLUG: dict[str, str] = {
@@ -109,22 +116,34 @@ def _fmt_game_time(game_time_utc: str | None) -> str | None:
         return None
 
 
-def _edge_color(edge: float | None) -> int:
+def _edge_color(edge: float | None, market: float | None = None) -> int:
     if edge is None:
+        return _COLOR_GRAY
+    if abs(edge) < _EDGE_ZERO_THRESHOLD:
         return _COLOR_GRAY
     if edge >= _VALUE_PLAY_THRESHOLD:
         return _COLOR_GREEN
     if edge > 0:
         return _COLOR_YELLOW
+    if market is not None and market >= _YRFI_SIGNAL_THRESHOLD:
+        return _COLOR_BLUE
     return _COLOR_RED
 
 
-def _recommendation(edge: float) -> str:
+def _recommendation(edge: float, market: float | None = None) -> str:
     edge_pct = f"{abs(edge) * 100:.0f}%"
-    if edge >= _VALUE_PLAY_THRESHOLD:
+    if abs(edge) < _EDGE_ZERO_THRESHOLD:
+        return "⚪ **No model edge** — anchored to market (early-season, no in-season data yet)"
+    elif edge >= _VALUE_PLAY_THRESHOLD:
         return f"🟢 **Model strongly favors NRFI** — {edge_pct} above market"
     elif edge > 0:
         return f"🟡 **Model leans NRFI** — slight disagreement with market"
+    elif market is not None and market >= _YRFI_SIGNAL_THRESHOLD:
+        mkt_pct = f"{market * 100:.0f}%"
+        return (
+            f"🔵 **Lean YRFI** — market prices NRFI at {mkt_pct} but historically "
+            f"heavy favorites go NRFI only ~48–54%. Value may be on YRFI at these odds."
+        )
     elif edge > -_VALUE_PLAY_THRESHOLD:
         return f"🟡 **Model leans YRFI** — market more confident in NRFI than model"
     else:
@@ -156,7 +175,7 @@ def _build_pick_embed(pred: dict[str, Any]) -> dict:
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
         data_line = f"Model {model * 100:.1f}% · Mkt {market * 100:.1f}% · Edge {sign}{edge * 100:.1f}%"
-        description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge)}"
+        description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge, market)}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"
         description = f"{pitchers_line}{odds_line}Model {nrfi_pct} · Mkt N/A\n⚪ No lines yet — model gives NRFI {nrfi_pct}"
@@ -166,7 +185,7 @@ def _build_pick_embed(pred: dict[str, Any]) -> dict:
     embed: dict[str, Any] = {
         "title": title,
         "description": description,
-        "color": _edge_color(edge),
+        "color": _edge_color(edge, market),
     }
     logo_url = _team_logo_url(home)
     if logo_url:
@@ -344,15 +363,18 @@ def _build_picks_embeds(target_date: str) -> list[dict[str, Any]]:
 
         preds.sort(key=lambda p: (p["edge"] is None, -(p["edge"] or 0)))
 
-        value_plays = sum(1 for p in preds if p.get("edge") is not None and p["edge"] >= _VALUE_PLAY_THRESHOLD)
-        leans       = sum(1 for p in preds if p.get("edge") is not None and 0 < p["edge"] < _VALUE_PLAY_THRESHOLD)
-        no_lines    = sum(1 for p in preds if p.get("edge") is None)
+        value_plays  = sum(1 for p in preds if p.get("edge") is not None and p["edge"] >= _VALUE_PLAY_THRESHOLD)
+        leans        = sum(1 for p in preds if p.get("edge") is not None and 0 < p["edge"] < _VALUE_PLAY_THRESHOLD)
+        yrfi_signals = sum(1 for p in preds if p.get("p_nrfi_market") is not None and p["p_nrfi_market"] >= _YRFI_SIGNAL_THRESHOLD)
+        no_lines     = sum(1 for p in preds if p.get("edge") is None)
 
         parts = [f"{len(preds)} games today"]
         if value_plays:
             parts.append(f"**{value_plays} value play{'s' if value_plays != 1 else ''}**")
         if leans:
             parts.append(f"{leans} lean{'s' if leans != 1 else ''}")
+        if yrfi_signals:
+            parts.append(f"🔵 {yrfi_signals} YRFI signal{'s' if yrfi_signals != 1 else ''}")
         if no_lines:
             parts.append(f"{no_lines} no lines yet")
 
@@ -439,6 +461,236 @@ async def display_picks(interaction: discord.Interaction) -> None:
         await interaction.followup.send(embeds=chunk, ephemeral=True)
 
 
+def _build_yrfi_signals_embed(target_date: str) -> dict[str, Any]:
+    """Build embed showing only YRFI signal games (market >= 60% NRFI)."""
+    db = SessionLocal()
+    try:
+        games = db.query(Game).filter(Game.game_date == target_date).all()
+        signals = []
+        for game in games:
+            pred = predict_for_game(game.id, db)
+            if pred is None:
+                continue
+            market = pred.get("p_nrfi_market")
+            if market is None or market < _YRFI_SIGNAL_THRESHOLD:
+                continue
+
+            gp = db.query(GamePitchers).filter_by(game_id=game.id).first()
+            away_sp = gp.away_sp.name if gp and gp.away_sp else None
+            home_sp = gp.home_sp.name if gp and gp.home_sp else None
+
+            odds_row = db.query(Odds).filter_by(game_id=game.id).first()
+            nrfi_odds = odds_row.first_inn_under_odds if odds_row else None
+            yrfi_odds = odds_row.first_inn_over_odds if odds_row else None
+
+            game_time_str = _fmt_game_time(game.game_time)
+            title = f"{game.away_team} @ {game.home_team}"
+            if game_time_str:
+                title += f"  ·  {game_time_str}"
+
+            pitchers = f"{away_sp} vs {home_sp}" if away_sp and home_sp else ""
+            odds_str = f"NRFI {_fmt_odds(nrfi_odds)} · YRFI {_fmt_odds(yrfi_odds)}" if nrfi_odds or yrfi_odds else ""
+            edge = pred.get("edge")
+            sign = "+" if edge is not None and edge >= 0 else ""
+            edge_str = f"{sign}{edge * 100:.1f}%" if edge is not None else "N/A"
+
+            signals.append(
+                f"**{title}**"
+                + (f"\n{pitchers}" if pitchers else "")
+                + (f"\n{odds_str}" if odds_str else "")
+                + f"\nMkt {market * 100:.1f}% NRFI · Edge {edge_str}"
+            )
+
+        if not signals:
+            return {
+                "title": f"🔵 YRFI Signals — {target_date}",
+                "description": "No games with market ≥ 60% NRFI today.",
+                "color": _COLOR_GRAY,
+            }
+
+        return {
+            "title": f"🔵 YRFI Signals — {target_date}",
+            "description": (
+                f"{len(signals)} game{'s' if len(signals) != 1 else ''} with market ≥ 60% NRFI "
+                f"— bet YRFI on these\n\n"
+                + "\n\n".join(signals)
+            ),
+            "color": _COLOR_BLUE,
+            "footer": {"text": "Historical ROI: +46–54% when market implies ≥60% NRFI. Bet YRFI at the posted over line."},
+        }
+    finally:
+        db.close()
+
+
+def _build_season_record_embed() -> dict[str, Any]:
+    """Build embed showing season W/L for model picks and YRFI signal."""
+    from backend.data.fetch_odds import american_to_implied, remove_vig
+
+    _value_threshold = _VALUE_PLAY_THRESHOLD
+    _yrfi_threshold  = _YRFI_SIGNAL_THRESHOLD
+
+    db = SessionLocal()
+    try:
+        season_rows = (
+            db.query(Game, NrfiFeatures)
+            .join(NrfiFeatures, NrfiFeatures.game_id == Game.id)
+            .filter(
+                NrfiFeatures.nrfi_label.isnot(None),
+                NrfiFeatures.p_nrfi_model.isnot(None),
+            )
+            .all()
+        )
+
+        all_w = all_l = val_w = val_l = yrfi_w = yrfi_l = 0
+
+        for game, feat in season_rows:
+            p_market = feat.p_nrfi_market
+            if p_market is None:
+                odds_row = db.query(Odds).filter_by(game_id=feat.game_id).first()
+                if odds_row and odds_row.first_inn_under_odds and odds_row.first_inn_over_odds:
+                    p_yrfi_raw = american_to_implied(odds_row.first_inn_over_odds)
+                    p_nrfi_raw = american_to_implied(odds_row.first_inn_under_odds)
+                    _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
+            if p_market is None:
+                continue
+
+            edge = feat.p_nrfi_model - p_market
+            won_nrfi = bool(feat.nrfi_label)
+            won_yrfi = not won_nrfi
+
+            if edge > 0:
+                all_w += int(won_nrfi)
+                all_l += int(not won_nrfi)
+                if edge >= _value_threshold:
+                    val_w += int(won_nrfi)
+                    val_l += int(not won_nrfi)
+
+            if p_market >= _yrfi_threshold:
+                yrfi_w += int(won_yrfi)
+                yrfi_l += int(not won_yrfi)
+
+        def _wl(w, l):
+            total = w + l
+            pct = f"{w / total * 100:.1f}%" if total else "—"
+            return f"{w}-{l} ({pct})" if total else "No bets yet"
+
+        year = date.today().year
+        return {
+            "title": f"📊 Season Record — {year}",
+            "color": _COLOR_BLUE,
+            "fields": [
+                {"name": "All Model Picks (edge > 0)", "value": _wl(all_w, all_l), "inline": True},
+                {"name": f"Value Plays (edge > +{int(_value_threshold * 100)}%)", "value": _wl(val_w, val_l), "inline": True},
+                {"name": f"🔵 YRFI Signal (market ≥ {int(_yrfi_threshold * 100)}% NRFI)", "value": _wl(yrfi_w, yrfi_l), "inline": False},
+            ],
+            "footer": {"text": "YRFI Signal: bet YRFI when market implies ≥60% NRFI. Historical ROI +46–54%."},
+        }
+    finally:
+        db.close()
+
+
+def _build_yesterday_embed() -> dict[str, Any]:
+    """Build embed showing yesterday's results for model picks and YRFI signal."""
+    from datetime import timedelta
+    score_date = str(date.today() - timedelta(days=1))
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Game, NrfiFeatures)
+            .join(NrfiFeatures, NrfiFeatures.game_id == Game.id)
+            .filter(
+                Game.game_date == score_date,
+                NrfiFeatures.nrfi_label.isnot(None),
+                NrfiFeatures.p_nrfi_model.isnot(None),
+            )
+            .order_by(Game.game_date)
+            .all()
+        )
+
+        if not rows:
+            return {
+                "title": f"Yesterday's Results — {score_date}",
+                "description": "No completed results found.",
+                "color": _COLOR_GRAY,
+            }
+
+        nrfi_lines = []
+        yrfi_lines = []
+        nrfi_w = nrfi_l = yrfi_w = yrfi_l = 0
+
+        for game, feat in rows:
+            p_market = feat.p_nrfi_market
+            if p_market is None:
+                odds_row = db.query(Odds).filter_by(game_id=feat.game_id).first()
+                if odds_row and odds_row.first_inn_under_odds and odds_row.first_inn_over_odds:
+                    p_yrfi_raw = american_to_implied(odds_row.first_inn_over_odds)
+                    p_nrfi_raw = american_to_implied(odds_row.first_inn_under_odds)
+                    _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
+            if p_market is None:
+                continue
+
+            edge = feat.p_nrfi_model - p_market
+            actual_nrfi = bool(feat.nrfi_label)
+
+            if edge > 0:
+                won = actual_nrfi
+                icon = "✅" if won else "❌"
+                outcome = "NRFI ✓" if actual_nrfi else "YRFI"
+                sign = "+" if edge >= 0 else ""
+                nrfi_lines.append(
+                    f"{icon} {game.away_team} @ {game.home_team} — {outcome} | "
+                    f"Model {feat.p_nrfi_model * 100:.0f}% · Mkt {p_market * 100:.0f}% · Edge {sign}{edge * 100:.0f}%"
+                )
+                nrfi_w += int(won)
+                nrfi_l += int(not won)
+
+            if p_market >= _YRFI_SIGNAL_THRESHOLD:
+                won_yrfi = not actual_nrfi
+                icon = "✅" if won_yrfi else "❌"
+                outcome = "YRFI ✓" if not actual_nrfi else "NRFI"
+                yrfi_lines.append(
+                    f"{icon} {game.away_team} @ {game.home_team} — {outcome} | Mkt {p_market * 100:.0f}% NRFI"
+                )
+                yrfi_w += int(won_yrfi)
+                yrfi_l += int(not won_yrfi)
+
+        def _wl(w, l):
+            total = w + l
+            pct = f"{w / total * 100:.1f}%" if total else "—"
+            return f"{w}-{l} ({pct})"
+
+        parts = []
+        if nrfi_lines:
+            parts.append(f"**Model Picks — {_wl(nrfi_w, nrfi_l)}**\n" + "\n".join(nrfi_lines))
+        else:
+            parts.append("**Model Picks** — No positive-edge picks yesterday.")
+
+        if yrfi_lines:
+            parts.append(f"**🔵 YRFI Signal — {_wl(yrfi_w, yrfi_l)}**\n" + "\n".join(yrfi_lines))
+
+        color = _COLOR_GREEN if (nrfi_w + yrfi_w) > (nrfi_l + yrfi_l) else _COLOR_RED
+
+        return {
+            "title": f"Yesterday's Results — {score_date}",
+            "description": "\n\n".join(parts),
+            "color": color,
+        }
+    finally:
+        db.close()
+
+
+def _run_odds_refresh() -> str:
+    """Run the odds refresh pipeline and return a status message."""
+    try:
+        from scripts.refresh_odds import refresh_odds
+        refresh_odds()
+        return "✅ Odds refresh complete. Lines updated for today's games."
+    except Exception as exc:
+        logger.exception("Odds refresh failed")
+        return f"❌ Odds refresh failed: {exc}"
+
+
 def _ensure_tomorrow_pipeline(target_date: str) -> None:
     """Run the daily pipeline for target_date if no predictions exist yet."""
     from scripts.run_daily import run_daily
@@ -475,6 +727,44 @@ async def tomorrow_picks(interaction: discord.Interaction) -> None:
     for i in range(0, len(embeds), 10):
         chunk = embeds[i:i + 10]
         await interaction.followup.send(embeds=chunk, ephemeral=True)
+
+
+@bot.tree.command(name="yrfi-signals", description="Show today's YRFI signal games (market 60%+ NRFI) privately.")
+async def yrfi_signals(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    target_date = str(date.today())
+    embed_data = await asyncio.get_event_loop().run_in_executor(
+        None, _build_yrfi_signals_embed, target_date
+    )
+    embed = discord.Embed.from_dict(embed_data)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="season-record", description="Show season W/L record for model picks and YRFI signal.")
+async def season_record(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    embed_data = await asyncio.get_event_loop().run_in_executor(
+        None, _build_season_record_embed
+    )
+    embed = discord.Embed.from_dict(embed_data)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="refresh-odds", description="Refresh today's odds lines from the sportsbook API.")
+async def refresh_odds_cmd(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    msg = await asyncio.get_event_loop().run_in_executor(None, _run_odds_refresh)
+    await interaction.followup.send(msg, ephemeral=True)
+
+
+@bot.tree.command(name="yesterday-picks", description="Show yesterday's results for model picks and YRFI signal.")
+async def yesterday_picks(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    embed_data = await asyncio.get_event_loop().run_in_executor(
+        None, _build_yesterday_embed
+    )
+    embed = discord.Embed.from_dict(embed_data)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 if __name__ == "__main__":
