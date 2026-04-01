@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 from backend.data.fetch_odds import american_to_implied, remove_vig
 from backend.db.models import Game, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
+from backend.modeling.model_classes import DeltaModel
 from backend.modeling.model_store import DEFAULT_MODEL_PATH, load_model
 from backend.modeling.train_model import FEATURE_COLS
 
@@ -108,15 +109,17 @@ def run_backtest(
     # Batch predict using current model on stored features
     # Interaction features are derived the same way as train_model.py
     # -----------------------------------------------------------------------
-    _BASE_COLS = [c for c in FEATURE_COLS if c not in (
-        "park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"
-    )]
+    _DERIVED = {"park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"}
+    _BASE_COLS = [c for c in FEATURE_COLS if c not in _DERIVED]
 
     records = []
     for game, feat in rows:
         rec: dict = {}
         for col in _BASE_COLS:
             rec[col] = getattr(feat, col, None)
+        # Track in-season coverage for Fix 1 blend (CalibratedModel only)
+        rec["_h_has_data"] = feat.home_sp_last5_era is not None
+        rec["_a_has_data"] = feat.away_sp_last5_era is not None
         records.append(rec)
 
     feat_df = pd.DataFrame(records)
@@ -125,6 +128,17 @@ def run_backtest(
     feat_df["lineup_obp_diff"]        = feat_df["away_lineup_obp"] - feat_df["home_lineup_obp"]
 
     p_model_arr = model.predict_proba(feat_df[FEATURE_COLS])[:, 1]
+
+    # Fix 1: market anchor blend for CalibratedModel when in-season data is sparse.
+    # DeltaModel handles early-season sparsity internally (delta → 0).
+    is_delta = isinstance(model, DeltaModel)
+    if not is_delta:
+        in_season_coverage = (
+            feat_df["_h_has_data"].astype(float) + feat_df["_a_has_data"].astype(float)
+        ) / 2.0
+        # p_market per row will be resolved later; store coverage for use in the loop
+    else:
+        in_season_coverage = pd.Series([1.0] * len(feat_df))
 
     # -----------------------------------------------------------------------
     # Per-game edge computation and bet simulation
@@ -150,6 +164,11 @@ def run_backtest(
             p_nrfi_raw = american_to_implied(odds_row_raw)
             p_yrfi_raw = 1.0 - p_nrfi_raw + 0.04  # approximate vig
             _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
+
+        # Fix 1: market anchor blend for CalibratedModel
+        coverage = float(in_season_coverage.iloc[i])
+        if not is_delta and coverage < 1.0:
+            p_model = coverage * p_model + (1.0 - coverage) * p_market
 
         edge = p_model - p_market
         if edge < min_edge:

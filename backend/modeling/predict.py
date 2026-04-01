@@ -18,6 +18,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from backend.db.models import Game, NrfiFeatures, Odds
+from backend.modeling.model_classes import DeltaModel
 from backend.modeling.model_store import load_model
 from backend.modeling.train_model import FEATURE_COLS
 
@@ -87,6 +88,22 @@ def predict_for_game(game_id: int, db: Session) -> dict[str, Any] | None:
             p_nrfi_raw = american_to_implied(odds_row.first_inn_under_odds)
             _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
             p_market = round(p_market, 4)
+
+    # Fix 1: Market anchor blend for CalibratedModel.
+    # When neither pitcher has in-season starts yet, the XGB/LR model collapses
+    # to the same league-median prediction for every game. Blend toward the market
+    # probability proportional to how much in-season data we actually have.
+    # DeltaModel handles this internally (delta ≈ 0 when features uninformative).
+    if p_market is not None and not isinstance(model, DeltaModel):
+        h_has_data = feat.home_sp_last5_era is not None
+        a_has_data = feat.away_sp_last5_era is not None
+        in_season_coverage = (int(h_has_data) + int(a_has_data)) / 2.0
+        if in_season_coverage < 1.0:
+            p_model = in_season_coverage * p_model + (1.0 - in_season_coverage) * p_market
+            logger.debug(
+                "Game %d: market anchor blend (coverage=%.1f%%) → p_model=%.4f",
+                game_id, in_season_coverage * 100, p_model,
+            )
 
     edge = round(p_model - p_market, 4) if p_market is not None else None
 

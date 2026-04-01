@@ -156,3 +156,89 @@ class CalibratedModel:
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
+
+
+class XGBDeltaModel(BaseEstimator):
+    """
+    XGBRegressor that predicts delta = nrfi_label - p_nrfi_market.
+
+    Training target is the residual between actual outcome and market probability,
+    forcing the model to learn only corrections beyond what the market already knows.
+    When features are uninformative (all imputed to median), the predicted delta
+    tends toward 0, leaving the market probability intact.
+    """
+
+    def __init__(self) -> None:
+        self.imputer_: SeasonStartImputer | None = None
+        self.reg_: Any | None = None
+
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y_delta: "pd.Series",
+        X_val: "pd.DataFrame | None" = None,
+        y_val: "pd.Series | None" = None,
+    ) -> "XGBDeltaModel":
+        from xgboost import XGBRegressor
+
+        self.imputer_ = SeasonStartImputer()
+        X_imp = self.imputer_.fit_transform(X)
+
+        eval_set = None
+        if X_val is not None and y_val is not None:
+            X_val_imp = self.imputer_.transform(X_val)
+            eval_set = [(X_val_imp, y_val.values)]
+
+        self.reg_ = XGBRegressor(
+            n_estimators=2000,
+            max_depth=3,
+            learning_rate=0.005,
+            subsample=0.7,
+            colsample_bytree=0.6,
+            min_child_weight=60,
+            gamma=0.5,
+            reg_alpha=0.3,
+            reg_lambda=2.0,
+            eval_metric="rmse",
+            early_stopping_rounds=50 if eval_set else None,
+            random_state=42,
+            verbosity=0,
+        )
+        self.reg_.fit(X_imp, y_delta.values, eval_set=eval_set, verbose=False)
+        return self
+
+    def predict_delta(self, X: pd.DataFrame) -> np.ndarray:
+        X_imp = self.imputer_.transform(X)
+        return self.reg_.predict(X_imp)
+
+    @property
+    def feature_importances_(self) -> np.ndarray:
+        return self.reg_.feature_importances_
+
+
+class DeltaModel:
+    """
+    Wraps XGBDeltaModel to produce final NRFI probability predictions.
+
+    Final probability = clip(p_market + delta, 0.05, 0.95)
+    where p_market comes from the 'p_nrfi_market' column in X.
+
+    When p_nrfi_market is NULL, falls back to 0.50, ensuring that games with
+    no market line and no in-season pitcher data produce a neutral output rather
+    than a spurious directional prediction.
+    """
+
+    def __init__(self, delta_model: XGBDeltaModel) -> None:
+        self.delta_model = delta_model
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        deltas = self.delta_model.predict_delta(X)
+        if "p_nrfi_market" in X.columns:
+            p_market = X["p_nrfi_market"].fillna(0.50).values
+        else:
+            p_market = np.full(len(X), 0.50)
+        p_nrfi = np.clip(p_market + deltas, 0.05, 0.95)
+        return np.column_stack([1.0 - p_nrfi, p_nrfi])
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
