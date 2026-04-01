@@ -241,25 +241,115 @@ def run_backtest(
         )
 
     # -----------------------------------------------------------------------
-    # Calibration check: empirical NRFI rate vs model probability bucket
+    # YRFI flip analysis: what if we bet YRFI whenever model says NRFI < market?
+    # (edge is negative → model favors YRFI)
+    # This tells us if the model's information is structurally inverted.
     # -----------------------------------------------------------------------
     logger.info("")
-    logger.info("CALIBRATION CHECK (all games with market, not just bets)")
+    logger.info("YRFI FLIP ANALYSIS (bet YRFI when model < market, i.e. negative edge)")
+    logger.info("  %-10s  %6s  %10s  %8s  %8s", "Flip Edge", "Bets", "Record", "Hit%", "ROI")
+    logger.info("  " + "-" * 54)
 
-    cal_buckets: dict[str, list] = defaultdict(list)
+    flip_buckets = [
+        ("0–1%",  0.00, 0.01),
+        ("1–2%",  0.01, 0.02),
+        ("2–3%",  0.02, 0.03),
+        ("3–4%",  0.03, 0.04),
+        ("4–5%",  0.04, 0.05),
+        ("5%+",   0.05, 1.00),
+    ]
+
+    flip_bets: list[dict] = []
     for i, (game, feat) in enumerate(rows):
-        p_model = float(p_model_arr[i])
-        actual = int(feat.nrfi_label)
-        bucket_label = f"{int(p_model * 100 // 5) * 5}-{int(p_model * 100 // 5) * 5 + 5}%"
-        cal_buckets[bucket_label].append((p_model, actual))
+        p_model_i = float(p_model_arr[i])
+        has_real_i = game.id in nrfi_odds_map
+        if real_odds_only and not has_real_i:
+            continue
+        p_market_i = feat.p_nrfi_market
+        if p_market_i is None:
+            odds_raw_i = nrfi_odds_map.get(game.id)
+            if odds_raw_i is None:
+                continue
+            p_nrfi_r = american_to_implied(odds_raw_i)
+            p_yrfi_r = 1.0 - p_nrfi_r + 0.04
+            _, p_market_i = remove_vig(p_yrfi_r, p_nrfi_r)
+        cov_i = float(in_season_coverage.iloc[i])
+        if cov_i < 1.0:
+            p_model_i = cov_i * p_model_i + (1.0 - cov_i) * p_market_i
+        edge_i = p_model_i - p_market_i
+        if edge_i >= 0:
+            continue  # only negative-edge (YRFI-favoring) games
+        flip_edge = abs(edge_i)
+        # Betting YRFI: win when NRFI did NOT happen
+        yrfi_american = nrfi_odds_map.get(game.id)
+        # YRFI payout: use over odds if available (stored as first_inn_over_odds)
+        # For now approximate from NRFI odds (assume symmetric vig)
+        if yrfi_american is not None:
+            # Invert: if NRFI is -130, YRFI is approx +100 to +110
+            yrfi_payout = _payout_multiplier(-110)  # conservative default
+        else:
+            yrfi_payout = _payout_multiplier(-110)
+        won_yrfi = not bool(feat.nrfi_label)
+        flip_bets.append({
+            "date":      game.game_date,
+            "flip_edge": flip_edge,
+            "won":       won_yrfi,
+            "profit":    yrfi_payout if won_yrfi else -1.0,
+        })
 
-    logger.info("  %-10s  %6s  %10s  %8s", "Model%", "Games", "Empirical%", "Avg Model%")
-    logger.info("  " + "-" * 40)
-    for bucket_label in sorted(cal_buckets.keys()):
-        data = cal_buckets[bucket_label]
-        empirical = sum(a for _, a in data) / len(data) * 100
-        avg_model = sum(p for p, _ in data) / len(data) * 100
-        logger.info("  %-10s  %6d  %9.1f%%  %9.1f%%", bucket_label, len(data), empirical, avg_model)
+    for label, lo, hi in flip_buckets:
+        fb = [b for b in flip_bets if lo <= b["flip_edge"] < hi]
+        if not fb:
+            continue
+        n = len(fb)
+        w = sum(1 for b in fb if b["won"])
+        roi_f = sum(b["profit"] for b in fb) / n * 100
+        logger.info("  %-10s  %6d  %5d-%-4d  %7.1f%%  %+7.2f%%",
+                    label, n, w, n - w, w / n * 100, roi_f)
+
+    if flip_bets:
+        n_all = len(flip_bets)
+        w_all = sum(1 for b in flip_bets if b["won"])
+        roi_all = sum(b["profit"] for b in flip_bets) / n_all * 100
+        logger.info("  %-10s  %6d  %5d-%-4d  %7.1f%%  %+7.2f%%",
+                    "ALL", n_all, w_all, n_all - w_all, w_all / n_all * 100, roi_all)
+
+    # -----------------------------------------------------------------------
+    # Calibration check: model%, market%, empirical% side by side
+    # Bucketed by MARKET probability (the prior), not model probability
+    # -----------------------------------------------------------------------
+    logger.info("")
+    logger.info("CALIBRATION CHECK — bucketed by MARKET implied probability")
+    logger.info("  %-10s  %6s  %10s  %10s  %10s  %8s",
+                "Mkt%", "Games", "Model%", "Market%", "Empirical%", "Bias")
+    logger.info("  " + "-" * 62)
+
+    mkt_buckets: dict[str, list] = defaultdict(list)
+    for i, (game, feat) in enumerate(rows):
+        p_model_i = float(p_model_arr[i])
+        p_market_i = feat.p_nrfi_market
+        if p_market_i is None:
+            odds_raw_i = nrfi_odds_map.get(game.id)
+            if odds_raw_i is None:
+                continue
+            p_nrfi_r = american_to_implied(odds_raw_i)
+            p_yrfi_r = 1.0 - p_nrfi_r + 0.04
+            _, p_market_i = remove_vig(p_yrfi_r, p_nrfi_r)
+        cov_i = float(in_season_coverage.iloc[i])
+        if cov_i < 1.0:
+            p_model_i = cov_i * p_model_i + (1.0 - cov_i) * p_market_i
+        actual = int(feat.nrfi_label)
+        mkt_label = f"{int(p_market_i * 100 // 5) * 5}-{int(p_market_i * 100 // 5) * 5 + 5}%"
+        mkt_buckets[mkt_label].append((p_model_i, p_market_i, actual))
+
+    for mkt_label in sorted(mkt_buckets.keys()):
+        data = mkt_buckets[mkt_label]
+        avg_model  = sum(p[0] for p in data) / len(data) * 100
+        avg_market = sum(p[1] for p in data) / len(data) * 100
+        empirical  = sum(p[2] for p in data) / len(data) * 100
+        bias = avg_model - empirical  # positive = model overclaims NRFI
+        logger.info("  %-10s  %6d  %9.1f%%  %9.1f%%  %9.1f%%  %+7.1f%%",
+                    mkt_label, len(data), avg_model, avg_market, empirical, bias)
 
     # -----------------------------------------------------------------------
     # Results by year

@@ -66,8 +66,13 @@ _MAX_EMBEDS_PER_REQUEST = 10
 _VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 100.0
 
 
+_EDGE_ZERO_THRESHOLD = 0.001  # treat |edge| < 0.1% as effectively zero (early-season anchor)
+
+
 def _edge_color(edge: float | None) -> int:
     if edge is None:
+        return _COLOR_GRAY
+    if abs(edge) < _EDGE_ZERO_THRESHOLD:
         return _COLOR_GRAY
     if edge >= _VALUE_PLAY_THRESHOLD:
         return _COLOR_GREEN
@@ -80,7 +85,9 @@ def _recommendation(edge: float, model: float) -> str:
     """Concise read on whether to bet NRFI, lean, or fade."""
     edge_pct = f"{abs(edge) * 100:.0f}%"
 
-    if edge >= _VALUE_PLAY_THRESHOLD:
+    if abs(edge) < _EDGE_ZERO_THRESHOLD:
+        return "⚪ **No model edge** — anchored to market (early-season, no in-season data yet)"
+    elif edge >= _VALUE_PLAY_THRESHOLD:
         return f"🟢 **Model strongly favors NRFI** — {edge_pct} above market"
     elif edge > 0:
         return f"🟡 **Model leans NRFI** — slight disagreement with market"
@@ -169,7 +176,8 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
 def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
     total = len(preds)
     value_plays = sum(1 for p in preds if p.get("edge") is not None and p["edge"] >= _VALUE_PLAY_THRESHOLD)
-    leans = sum(1 for p in preds if p.get("edge") is not None and 0 < p["edge"] < _VALUE_PLAY_THRESHOLD)
+    leans = sum(1 for p in preds if p.get("edge") is not None and _EDGE_ZERO_THRESHOLD <= p["edge"] < _VALUE_PLAY_THRESHOLD)
+    anchored = sum(1 for p in preds if p.get("edge") is not None and abs(p["edge"]) < _EDGE_ZERO_THRESHOLD)
     no_lines = sum(1 for p in preds if p.get("edge") is None)
 
     parts = [f"{total} games today"]
@@ -177,6 +185,8 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
         parts.append(f"**{value_plays} value play{'s' if value_plays != 1 else ''}**")
     if leans:
         parts.append(f"{leans} lean{'s' if leans != 1 else ''}")
+    if anchored:
+        parts.append(f"{anchored} anchored to market")
     if no_lines:
         parts.append(f"{no_lines} no lines yet")
 
