@@ -129,16 +129,14 @@ def run_backtest(
 
     p_model_arr = model.predict_proba(feat_df[FEATURE_COLS])[:, 1]
 
-    # Fix 1: market anchor blend for CalibratedModel when in-season data is sparse.
-    # DeltaModel handles early-season sparsity internally (delta → 0).
+    # Market anchor blend: applies to ALL model types including DeltaModel.
+    # DeltaModel learns a systematic delta correction that fires even when all
+    # in-season features are NULL, producing large uniform negative edges on
+    # Opening Day. Scale the delta toward 0 when in-season data is sparse.
     is_delta = isinstance(model, DeltaModel)
-    if not is_delta:
-        in_season_coverage = (
-            feat_df["_h_has_data"].astype(float) + feat_df["_a_has_data"].astype(float)
-        ) / 2.0
-        # p_market per row will be resolved later; store coverage for use in the loop
-    else:
-        in_season_coverage = pd.Series([1.0] * len(feat_df))
+    in_season_coverage = (
+        feat_df["_h_has_data"].astype(float) + feat_df["_a_has_data"].astype(float)
+    ) / 2.0
 
     # -----------------------------------------------------------------------
     # Per-game edge computation and bet simulation
@@ -165,9 +163,9 @@ def run_backtest(
             p_yrfi_raw = 1.0 - p_nrfi_raw + 0.04  # approximate vig
             _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
 
-        # Fix 1: market anchor blend for CalibratedModel
+        # Market anchor blend (all model types)
         coverage = float(in_season_coverage.iloc[i])
-        if not is_delta and coverage < 1.0:
+        if coverage < 1.0:
             p_model = coverage * p_model + (1.0 - coverage) * p_market
 
         edge = p_model - p_market

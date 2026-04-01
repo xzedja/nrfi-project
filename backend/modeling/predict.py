@@ -89,12 +89,20 @@ def predict_for_game(game_id: int, db: Session) -> dict[str, Any] | None:
             _, p_market = remove_vig(p_yrfi_raw, p_nrfi_raw)
             p_market = round(p_market, 4)
 
-    # Fix 1: Market anchor blend for CalibratedModel.
-    # When neither pitcher has in-season starts yet, the XGB/LR model collapses
-    # to the same league-median prediction for every game. Blend toward the market
-    # probability proportional to how much in-season data we actually have.
-    # DeltaModel handles this internally (delta ≈ 0 when features uninformative).
-    if p_market is not None and not isinstance(model, DeltaModel):
+    # Market anchor blend: scale toward market probability when in-season data is sparse.
+    # Applies to ALL model types including DeltaModel.
+    #
+    # For CalibratedModel: blends raw p_model toward p_market.
+    # For DeltaModel: same formula; effectively scales the learned delta toward 0.
+    #   DeltaModel learns a systematic market correction (e.g. "market overprices NRFI
+    #   by ~5-7% on average"). When features are all NULL/imputed, that correction still
+    #   fires and applies to every game equally — which is wrong. We need to suppress it
+    #   until real in-season data confirms the correction is warranted for a specific pitcher.
+    #
+    # coverage = 0.0 → Opening Day, both pitchers NULL → trust market fully (edge = 0)
+    # coverage = 0.5 → one pitcher has data, one doesn't → blend 50/50
+    # coverage = 1.0 → both pitchers have in-season starts → use full model output
+    if p_market is not None:
         h_has_data = feat.home_sp_last5_era is not None
         a_has_data = feat.away_sp_last5_era is not None
         in_season_coverage = (int(h_has_data) + int(a_has_data)) / 2.0
