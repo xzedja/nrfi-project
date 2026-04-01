@@ -44,6 +44,10 @@ from scripts.post_discord import _post_payload
 # Edge threshold (in probability, not pp) for "value plays"
 _VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 100.0
 
+# YRFI signal: bet YRFI when market implies >= this probability of NRFI
+# Historically (2023-2025): +36-54% ROI — market overprices heavy NRFI favorites
+_YRFI_SIGNAL_THRESHOLD = float(os.environ.get("YRFI_SIGNAL_THRESHOLD", "0.60"))
+
 _COLOR_GREEN  = 0x2ECC71
 _COLOR_RED    = 0xE74C3C
 _COLOR_GOLD   = 0xF1C40F
@@ -98,18 +102,22 @@ def post_results(target_date: str | None = None) -> None:
             logger.info("No completed results found for %s — skipping.", score_date)
             return
 
-        # Score yesterday's games
+        # Score yesterday's games — collect all rows with market data first
+        resolved: list[tuple] = []  # (game, feat, p_market)
+        for game, feat in rows:
+            p_market = _get_p_market(feat, db)
+            if p_market is not None:
+                resolved.append((game, feat, p_market))
+
+        # NRFI model picks (edge > 0)
         yesterday_lines = []
         yday_all_w = yday_all_l = 0
         yday_val_w = yday_val_l = 0
 
-        for game, feat in rows:
-            p_market = _get_p_market(feat, db)
-            if p_market is None:
-                continue
+        for game, feat, p_market in resolved:
             edge = feat.p_nrfi_model - p_market
             if edge <= 0:
-                continue  # no pick on negative edge
+                continue
 
             actual_nrfi = bool(feat.nrfi_label)
             won = actual_nrfi
@@ -131,8 +139,27 @@ def post_results(target_date: str | None = None) -> None:
                 yday_val_w += int(won)
                 yday_val_l += int(not won)
 
-        if not yesterday_lines:
-            logger.info("No positive-edge picks found for %s — skipping.", score_date)
+        # YRFI signal picks (market >= 60% NRFI — bet YRFI regardless of model edge)
+        yrfi_yesterday_lines = []
+        yday_yrfi_w = yday_yrfi_l = 0
+
+        for game, feat, p_market in resolved:
+            if p_market < _YRFI_SIGNAL_THRESHOLD:
+                continue
+            actual_nrfi = bool(feat.nrfi_label)
+            won_yrfi = not actual_nrfi  # we bet YRFI, win when run scores
+            result_icon = "✅" if won_yrfi else "❌"
+            outcome_str = "YRFI ✓" if not actual_nrfi else "NRFI"
+            mkt_pct = f"{p_market * 100:.0f}%"
+            yrfi_yesterday_lines.append(
+                f"{result_icon} {game.away_team} @ {game.home_team} — {outcome_str}"
+                f"  |  Mkt {mkt_pct} NRFI (YRFI signal)"
+            )
+            yday_yrfi_w += int(won_yrfi)
+            yday_yrfi_l += int(not won_yrfi)
+
+        if not yesterday_lines and not yrfi_yesterday_lines:
+            logger.info("No picks found for %s — skipping.", score_date)
             return
 
         # Compute season-to-date records (all dates up to and including score_date)
@@ -149,37 +176,46 @@ def post_results(target_date: str | None = None) -> None:
 
         season_all_w = season_all_l = 0
         season_val_w = season_val_l = 0
+        season_yrfi_w = season_yrfi_l = 0
 
         for game, feat in season_rows:
             p_market = _get_p_market(feat, db)
             if p_market is None:
                 continue
             edge = feat.p_nrfi_model - p_market
-            if edge <= 0:
-                continue
-            won = bool(feat.nrfi_label)
-            season_all_w += int(won)
-            season_all_l += int(not won)
-            if edge >= _VALUE_PLAY_THRESHOLD:
-                season_val_w += int(won)
-                season_val_l += int(not won)
+            if edge > 0:
+                won = bool(feat.nrfi_label)
+                season_all_w += int(won)
+                season_all_l += int(not won)
+                if edge >= _VALUE_PLAY_THRESHOLD:
+                    season_val_w += int(won)
+                    season_val_l += int(not won)
+            if p_market >= _YRFI_SIGNAL_THRESHOLD:
+                won_yrfi = not bool(feat.nrfi_label)
+                season_yrfi_w += int(won_yrfi)
+                season_yrfi_l += int(not won_yrfi)
 
     finally:
         db.close()
 
     # Build Discord embeds
-    yday_record_str = _win_loss_str(yday_all_w, yday_all_l)
-    game_list = "\n".join(yesterday_lines)
+    embeds = []
 
-    yesterday_embed = {
-        "title": f"Yesterday's Results — {score_date}",
-        "description": f"{game_list}\n\n**Yesterday:** {yday_record_str}",
-        "color": _COLOR_GREEN if yday_all_w >= yday_all_l else _COLOR_RED,
-    }
+    # Embed 1: NRFI model picks yesterday (only if any)
+    if yesterday_lines:
+        yday_record_str = _win_loss_str(yday_all_w, yday_all_l)
+        game_list = "\n".join(yesterday_lines)
+        yesterday_embed = {
+            "title": f"Yesterday's Results — {score_date}",
+            "description": f"{game_list}\n\n**Yesterday:** {yday_record_str}",
+            "color": _COLOR_GREEN if yday_all_w >= yday_all_l else _COLOR_RED,
+        }
+        embeds.append(yesterday_embed)
 
+    # Embed 2: Season record for model picks
     val_threshold_str = f"+{_VALUE_PLAY_THRESHOLD * 100:.0f}%"
     season_embed = {
-        "title": "Season Record",
+        "title": "Season Record — Model Picks",
         "color": _COLOR_GOLD,
         "fields": [
             {
@@ -195,9 +231,34 @@ def post_results(target_date: str | None = None) -> None:
         ],
         "footer": {"text": "Model% = predicted probability of no run in the 1st inning. Mkt% = sportsbook implied probability. Edge = how much our model disagrees with the market."},
     }
+    embeds.append(season_embed)
+
+    # Embed 3: YRFI signal (market 60%+ NRFI → bet YRFI)
+    yrfi_threshold_str = f"{int(_YRFI_SIGNAL_THRESHOLD * 100)}%"
+    yrfi_desc_parts = []
+    if yrfi_yesterday_lines:
+        yrfi_desc_parts.append("\n".join(yrfi_yesterday_lines))
+        yrfi_desc_parts.append(f"\n**Yesterday:** {_win_loss_str(yday_yrfi_w, yday_yrfi_l)}")
+    else:
+        yrfi_desc_parts.append(f"No games had market ≥ {yrfi_threshold_str} NRFI yesterday.")
+
+    yrfi_signal_embed = {
+        "title": f"🔵 YRFI Signal — Season Record",
+        "description": "\n".join(yrfi_desc_parts),
+        "color": _COLOR_BLUE,
+        "fields": [
+            {
+                "name": f"Season (market ≥ {yrfi_threshold_str} NRFI → bet YRFI)",
+                "value": _win_loss_str(season_yrfi_w, season_yrfi_l),
+                "inline": False,
+            },
+        ],
+        "footer": {"text": f"YRFI Signal: historically +36–54% ROI when market implies ≥{yrfi_threshold_str} NRFI. Bet YRFI at the posted over line."},
+    }
+    embeds.append(yrfi_signal_embed)
 
     try:
-        _post_payload(webhook_url, {"embeds": [yesterday_embed, season_embed]})
+        _post_payload(webhook_url, {"embeds": embeds})
         logger.info("Results posted to Discord for %s.", score_date)
     except requests.HTTPError as exc:
         logger.error("Discord webhook returned %s: %s", exc.response.status_code, exc.response.text)
