@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 from backend.data.fetch_odds import american_to_implied, remove_vig
 from backend.db.models import Game, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
-from backend.modeling.model_classes import DeltaModel
 from backend.modeling.model_store import DEFAULT_MODEL_PATH, load_model
 from backend.modeling.train_model import FEATURE_COLS
 
@@ -122,9 +121,6 @@ def run_backtest(
         rec: dict = {}
         for col in _BASE_COLS:
             rec[col] = getattr(feat, col, None)
-        # Track in-season coverage for Fix 1 blend (CalibratedModel only)
-        rec["_h_has_data"] = feat.home_sp_last5_era is not None
-        rec["_a_has_data"] = feat.away_sp_last5_era is not None
         records.append(rec)
 
     feat_df = pd.DataFrame(records)
@@ -133,11 +129,6 @@ def run_backtest(
     feat_df["lineup_obp_diff"]        = feat_df["away_lineup_obp"] - feat_df["home_lineup_obp"]
 
     p_model_arr = model.predict_proba(feat_df[FEATURE_COLS])[:, 1]
-
-    is_delta = isinstance(model, DeltaModel)
-    in_season_coverage = (
-        feat_df["_h_has_data"].astype(float) + feat_df["_a_has_data"].astype(float)
-    ) / 2.0
 
     # -----------------------------------------------------------------------
     # Per-game edge computation and bet simulation
@@ -270,9 +261,6 @@ def run_backtest(
             p_nrfi_r = american_to_implied(odds_raw_i)
             p_yrfi_r = 1.0 - p_nrfi_r + 0.04
             _, p_market_i = remove_vig(p_yrfi_r, p_nrfi_r)
-        cov_i = float(in_season_coverage.iloc[i])
-        if cov_i < 1.0:
-            p_model_i = cov_i * p_model_i + (1.0 - cov_i) * p_market_i
         edge_i = p_model_i - p_market_i
         if edge_i >= 0:
             continue  # only negative-edge (YRFI-favoring) games
@@ -379,9 +367,6 @@ def run_backtest(
             p_nrfi_r = american_to_implied(odds_raw_i)
             p_yrfi_r = 1.0 - p_nrfi_r + 0.04
             _, p_market_i = remove_vig(p_yrfi_r, p_nrfi_r)
-        cov_i = float(in_season_coverage.iloc[i])
-        if cov_i < 1.0:
-            p_model_i = cov_i * p_model_i + (1.0 - cov_i) * p_market_i
         actual = int(feat.nrfi_label)
         mkt_label = f"{int(p_market_i * 100 // 5) * 5}-{int(p_market_i * 100 // 5) * 5 + 5}%"
         mkt_buckets[mkt_label].append((p_model_i, p_market_i, actual))

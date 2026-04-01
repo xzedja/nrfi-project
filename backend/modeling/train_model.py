@@ -54,7 +54,7 @@ sys.path.insert(0, ".")
 
 from backend.db.models import Game, NrfiFeatures
 from backend.db.session import SessionLocal
-from backend.modeling.model_classes import CalibratedModel, DeltaModel, SeasonStartImputer, XGBDeltaModel, XGBModel
+from backend.modeling.model_classes import CalibratedModel, SeasonStartImputer, XGBModel
 from backend.modeling.model_store import DEFAULT_MODEL_PATH, save_model
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -278,48 +278,6 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
         logger.info("  %-45s  %.4f", feat, imp)
 
     # -----------------------------------------------------------------------
-    # Delta model: XGBRegressor trained on y' = nrfi_label - p_nrfi_market
-    # Only uses rows where p_nrfi_market is available (real or Poisson).
-    # When features are uninformative the predicted delta ≈ 0, leaving the
-    # market probability intact — naturally handling early-season sparsity.
-    # -----------------------------------------------------------------------
-    logger.info("--- Delta Model (XGBRegressor on residual vs market) ---")
-    train_d = train_df[train_df["p_nrfi_market"].notna()].copy()
-    val_d   = val_df[val_df["p_nrfi_market"].notna()].copy()
-    test_d  = test_df[test_df["p_nrfi_market"].notna()].copy()
-    logger.info(
-        "Delta split — train: %d  |  val: %d  |  test: %d",
-        len(train_d), len(val_d), len(test_d),
-    )
-
-    delta_model_obj: DeltaModel | None = None
-    delta_val: dict[str, float]  = {"auc": 0.0, "log_loss": 999.0, "brier": 999.0}
-    delta_test: dict[str, float] = {"auc": 0.0, "log_loss": 999.0, "brier": 999.0}
-
-    if len(train_d) >= 50 and len(val_d) >= 20:
-        X_train_d = train_d[FEATURE_COLS]
-        y_train_d = train_d["nrfi_label"].astype(float) - train_d["p_nrfi_market"]
-        X_val_d   = val_d[FEATURE_COLS]
-        y_val_d   = val_d["nrfi_label"].astype(float) - val_d["p_nrfi_market"]
-        X_test_d  = test_d[FEATURE_COLS]
-
-        xgb_delta = XGBDeltaModel()
-        xgb_delta.fit(X_train_d, y_train_d, X_val=X_val_d, y_val=y_val_d)
-        delta_model_obj = DeltaModel(xgb_delta)
-
-        evaluate("Delta Train", delta_model_obj, X_train_d, train_d["nrfi_label"].astype(int))
-        delta_val  = evaluate("Delta Val  ", delta_model_obj, X_val_d,  val_d["nrfi_label"].astype(int))
-        if len(test_d) > 0:
-            delta_test = evaluate("Delta Test ", delta_model_obj, X_test_d, test_d["nrfi_label"].astype(int))
-
-        delta_importances = xgb_delta.feature_importances_
-        logger.info("Delta model feature importances (gain):")
-        for feat_name, imp in sorted(zip(FEATURE_COLS, delta_importances), key=lambda x: -x[1]):
-            logger.info("  %-45s  %.4f", feat_name, imp)
-    else:
-        logger.warning("Not enough market-odds rows for delta model — skipping.")
-
-    # -----------------------------------------------------------------------
     # Summary comparison
     # -----------------------------------------------------------------------
     logger.info("--- Comparison (Val set) ---")
@@ -331,47 +289,31 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
         "  XGBoost             — AUC: %.4f  |  Brier: %.4f",
         xgb_val["auc"], xgb_val["brier"],
     )
-    if delta_model_obj is not None:
-        logger.info(
-            "  Delta Model         — AUC: %.4f  |  Brier: %.4f",
-            delta_val["auc"], delta_val["brier"],
-        )
 
     # -----------------------------------------------------------------------
     # Pick winner on val AUC
     # -----------------------------------------------------------------------
-    candidates = [
-        ("Logistic Regression", lr_model,  lr_val["auc"]),
-        ("XGBoost",             xgb_model, xgb_val["auc"]),
-    ]
-    if delta_model_obj is not None:
-        candidates.append(("Delta Model", delta_model_obj, delta_val["auc"]))
-
-    winner_name, winner, winner_auc = max(candidates, key=lambda c: c[2])
-    logger.info("Winner: %s (val AUC %.4f)", winner_name, winner_auc)
-
-    # -----------------------------------------------------------------------
-    # Calibrate winner (Platt scaling on val set).
-    # DeltaModel already outputs calibrated probabilities — skip Platt.
-    # -----------------------------------------------------------------------
-    if isinstance(winner, DeltaModel):
-        calibrated = winner
-        logger.info("Delta Model selected — skipping Platt calibration (outputs probabilities directly).")
-        cal_val  = delta_val
-        cal_test = delta_test
+    if xgb_val["auc"] >= lr_val["auc"]:
+        winner_name, winner = "XGBoost", xgb_model
     else:
-        logger.info("Calibrating %s on val set...", winner_name)
-        raw_val_probs = winner.predict_proba(X_val)[:, 1].reshape(-1, 1)
-        platt = _PlattLR(C=1.0, max_iter=1000)
-        platt.fit(raw_val_probs, y_val)
-        calibrated = CalibratedModel(winner, platt)
-        cal_val  = evaluate("Calibrated Val ", calibrated, X_val,  y_val)
-        cal_test = evaluate("Calibrated Test", calibrated, X_test, y_test)
-        logger.info(
-            "Calibration effect on Brier (test): %.4f → %.4f",
-            (xgb_test if winner_name == "XGBoost" else lr_test)["brier"],
-            cal_test["brier"],
-        )
+        winner_name, winner = "Logistic Regression", lr_model
+    logger.info("Winner: %s (val AUC %.4f)", winner_name, (xgb_val if winner_name == "XGBoost" else lr_val)["auc"])
+
+    # -----------------------------------------------------------------------
+    # Calibrate winner with Platt scaling on val set
+    # -----------------------------------------------------------------------
+    logger.info("Calibrating %s on val set...", winner_name)
+    raw_val_probs = winner.predict_proba(X_val)[:, 1].reshape(-1, 1)
+    platt = _PlattLR(C=1.0, max_iter=1000)
+    platt.fit(raw_val_probs, y_val)
+    calibrated = CalibratedModel(winner, platt)
+    cal_val  = evaluate("Calibrated Val ", calibrated, X_val,  y_val)
+    cal_test = evaluate("Calibrated Test", calibrated, X_test, y_test)
+    logger.info(
+        "Calibration effect on Brier (test): %.4f → %.4f",
+        (xgb_test if winner_name == "XGBoost" else lr_test)["brier"],
+        cal_test["brier"],
+    )
 
     save_model(calibrated, output_path)
     logger.info("Saved %s to %s", winner_name, output_path)

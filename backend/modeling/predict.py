@@ -18,7 +18,6 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from backend.db.models import Game, NrfiFeatures, Odds
-from backend.modeling.model_classes import DeltaModel
 from backend.modeling.model_store import load_model
 from backend.modeling.train_model import FEATURE_COLS
 
