@@ -123,10 +123,10 @@ FEATURE_COLS = [
 
 # Date boundaries for train/val/test split
 # 2020+ = modern baseball era (opener usage, shifted offenses, post-COVID)
-_TRAIN_START_YEAR = 2020
-_TRAIN_END_YEAR   = 2022   # train on 2020–2022
-_VAL_YEAR         = 2023   # validate on 2023
-_TEST_START_YEAR  = 2024   # test on 2024–present
+_TRAIN_START_YEAR = 2023
+_TRAIN_END_YEAR   = 2024   # train on 2023–2024 (real NRFI odds available)
+_VAL_YEAR         = 2025   # validate on 2025
+_TEST_START_YEAR  = 2026   # test on 2026–present
 
 
 def load_feature_dataframe() -> pd.DataFrame:
