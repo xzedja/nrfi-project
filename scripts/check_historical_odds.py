@@ -25,11 +25,14 @@ settings = get_settings()
 _HISTORICAL_EVENTS_URL = "https://api.the-odds-api.com/v4/historical/sports/baseball_mlb/events"
 _HISTORICAL_ODDS_URL   = "https://api.the-odds-api.com/v4/historical/sports/baseball_mlb/events/{event_id}/odds"
 
-# Sample a mid-season date from each of the last 3 seasons
+# Sample multiple dates across the 2025 season
 TEST_DATES = [
-    "2025-06-15",
-    "2024-06-15",
-    "2023-06-15",
+    "2025-04-01",
+    "2025-05-01",
+    "2025-06-01",
+    "2025-07-01",
+    "2025-08-01",
+    "2025-09-01",
 ]
 
 
