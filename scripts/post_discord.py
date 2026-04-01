@@ -81,7 +81,7 @@ def _edge_color(edge: float | None) -> int:
     return _COLOR_RED
 
 
-def _recommendation(edge: float, model: float) -> str:
+def _recommendation(edge: float, model: float, market: float | None = None) -> str:
     """Concise read on whether to bet NRFI, lean, or fade."""
     edge_pct = f"{abs(edge) * 100:.0f}%"
 
@@ -91,6 +91,12 @@ def _recommendation(edge: float, model: float) -> str:
         return f"🟢 **Model strongly favors NRFI** — {edge_pct} above market"
     elif edge > 0:
         return f"🟡 **Model leans NRFI** — slight disagreement with market"
+    elif market is not None and market >= 0.60 and edge <= -0.03:
+        edge_pct_mkt = f"{market * 100:.0f}%"
+        return (
+            f"📊 **Shadow YRFI** — market implies {edge_pct_mkt} NRFI but historical data "
+            f"shows heavy favorites go NRFI only ~48%. Tracking for 2026 analysis."
+        )
     elif edge > -_VALUE_PLAY_THRESHOLD:
         return f"🟡 **Model leans YRFI** — market more confident in NRFI than model"
     else:
@@ -150,7 +156,7 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
         data_line = f"Model {model * 100:.1f}% · Mkt {market * 100:.1f}% · Edge {sign}{edge * 100:.1f}%"
-        description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge, model)}"
+        description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge, model, market)}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"
         description = (
@@ -178,6 +184,11 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
     value_plays = sum(1 for p in preds if p.get("edge") is not None and p["edge"] >= _VALUE_PLAY_THRESHOLD)
     leans = sum(1 for p in preds if p.get("edge") is not None and _EDGE_ZERO_THRESHOLD <= p["edge"] < _VALUE_PLAY_THRESHOLD)
     anchored = sum(1 for p in preds if p.get("edge") is not None and abs(p["edge"]) < _EDGE_ZERO_THRESHOLD)
+    shadow_yrfi = sum(
+        1 for p in preds
+        if p.get("edge") is not None and p.get("p_nrfi_market") is not None
+        and p["p_nrfi_market"] >= 0.60 and p["edge"] <= -0.03
+    )
     no_lines = sum(1 for p in preds if p.get("edge") is None)
 
     parts = [f"{total} games today"]
@@ -187,6 +198,8 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
         parts.append(f"{leans} lean{'s' if leans != 1 else ''}")
     if anchored:
         parts.append(f"{anchored} anchored to market")
+    if shadow_yrfi:
+        parts.append(f"📊 {shadow_yrfi} shadow YRFI")
     if no_lines:
         parts.append(f"{no_lines} no lines yet")
 
