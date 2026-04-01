@@ -83,7 +83,7 @@ def run_backtest(
             .all()
         )
 
-        # Build odds lookup: game_id → NRFI american odds
+        # Build odds lookup: game_id → NRFI american odds AND YRFI american odds
         game_ids = [game.id for game, _ in rows]
         odds_rows = (
             db.query(Odds)
@@ -94,6 +94,11 @@ def run_backtest(
             .all()
         )
         nrfi_odds_map: dict[int, int] = {o.game_id: o.first_inn_under_odds for o in odds_rows}
+        yrfi_odds_map: dict[int, int] = {
+            o.game_id: o.first_inn_over_odds
+            for o in odds_rows
+            if o.first_inn_over_odds is not None
+        }
 
     finally:
         db.close()
@@ -280,19 +285,15 @@ def run_backtest(
         if edge_i >= 0:
             continue  # only negative-edge (YRFI-favoring) games
         flip_edge = abs(edge_i)
-        # Betting YRFI: win when NRFI did NOT happen
-        yrfi_american = nrfi_odds_map.get(game.id)
-        # YRFI payout: use over odds if available (stored as first_inn_over_odds)
-        # For now approximate from NRFI odds (assume symmetric vig)
-        if yrfi_american is not None:
-            # Invert: if NRFI is -130, YRFI is approx +100 to +110
-            yrfi_payout = _payout_multiplier(-110)  # conservative default
-        else:
-            yrfi_payout = _payout_multiplier(-110)
+        # Betting YRFI: win when NRFI did NOT happen. Use actual YRFI odds.
+        yrfi_american = yrfi_odds_map.get(game.id, -110)
+        yrfi_payout = _payout_multiplier(yrfi_american)
         won_yrfi = not bool(feat.nrfi_label)
         flip_bets.append({
             "date":      game.game_date,
             "flip_edge": flip_edge,
+            "p_market":  p_market_i,
+            "yrfi_odds": yrfi_american,
             "won":       won_yrfi,
             "profit":    yrfi_payout if won_yrfi else -1.0,
         })
@@ -313,6 +314,34 @@ def run_backtest(
         roi_all = sum(b["profit"] for b in flip_bets) / n_all * 100
         logger.info("  %-10s  %6d  %5d-%-4d  %7.1f%%  %+7.2f%%",
                     "ALL", n_all, w_all, n_all - w_all, w_all / n_all * 100, roi_all)
+
+    # -----------------------------------------------------------------------
+    # YRFI by market price tier — does fading heavy NRFI favorites pay off?
+    # -----------------------------------------------------------------------
+    logger.info("")
+    logger.info("YRFI FLIP BY MARKET PRICE TIER (all negative-edge games, any flip-edge size)")
+    logger.info("  %-12s  %6s  %10s  %8s  %8s  %8s", "Mkt NRFI%", "Bets", "Record", "Hit%", "ROI", "AvgYRFI")
+    logger.info("  " + "-" * 62)
+
+    mkt_flip_buckets = [
+        ("<50%",    0.00, 0.50),
+        ("50–55%",  0.50, 0.55),
+        ("55–60%",  0.55, 0.60),
+        ("60–65%",  0.60, 0.65),
+        ("65–70%",  0.65, 0.70),
+        ("70%+",    0.70, 1.00),
+    ]
+
+    for label, lo, hi in mkt_flip_buckets:
+        tier = [b for b in flip_bets if lo <= b["p_market"] < hi]
+        if not tier:
+            continue
+        n = len(tier)
+        w = sum(1 for b in tier if b["won"])
+        r = sum(b["profit"] for b in tier) / n * 100
+        avg_yrfi = sum(b["yrfi_odds"] for b in tier) / n
+        logger.info("  %-12s  %6d  %5d-%-4d  %7.1f%%  %+7.2f%%  %+7.0f",
+                    label, n, w, n - w, w / n * 100, r, avg_yrfi)
 
     # -----------------------------------------------------------------------
     # Calibration check: model%, market%, empirical% side by side
