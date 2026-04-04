@@ -288,8 +288,23 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
 
         logger.info("Posting %d predictions to Discord for %s.", len(preds), target)
 
-        # Sort: highest edge first (None edge at the bottom)
-        preds.sort(key=lambda p: (p["edge"] is None, -(p["edge"] or 0)))
+        # Sort: by signal tier, then by game time within each tier
+        def _tier(p: dict) -> int:
+            edge = p.get("edge")
+            market = p.get("p_nrfi_market")
+            if edge is None or abs(edge) < _EDGE_ZERO_THRESHOLD:
+                return 5  # no lines / anchored
+            if edge >= _VALUE_PLAY_THRESHOLD:
+                return 0  # green — model leans NRFI
+            if edge > 0:
+                return 1  # yellow — slight NRFI lean
+            if market is not None and market >= 0.60:
+                return 2  # blue — YRFI signal
+            if edge > -_VALUE_PLAY_THRESHOLD:
+                return 3  # yellow — slight YRFI lean
+            return 4      # red — model leans YRFI
+
+        preds.sort(key=lambda p: (_tier(p), p.get("game_time") or "9999"))
 
         # Build all embeds: header + one per game
         header_embed = _build_header_embed(target, preds)
