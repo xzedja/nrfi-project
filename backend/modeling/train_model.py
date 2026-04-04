@@ -134,7 +134,7 @@ _VAL_WINDOW_DAYS = 7
 # training, used exclusively for Platt scaling. Needs ~900 games for a stable fit —
 # large enough to cover a wide range of game contexts, recent enough to reflect
 # current-season conditions.
-_CALIB_WINDOW_DAYS = 90
+_CALIB_WINDOW_DAYS = 365
 
 
 def load_feature_dataframe() -> pd.DataFrame:
