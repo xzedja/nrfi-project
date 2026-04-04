@@ -35,8 +35,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -121,12 +124,12 @@ FEATURE_COLS = [
     "p_nrfi_market",
 ]
 
-# Date boundaries for train/val/test split
-# 2020+ = modern baseball era (opener usage, shifted offenses, post-COVID)
-_TRAIN_START_YEAR = 2023
-_TRAIN_END_YEAR   = 2024   # train on 2023–2024 (real NRFI odds available)
-_VAL_YEAR         = 2025   # validate on 2025
-_TEST_START_YEAR  = 2026   # test on 2026–present
+# Earliest season included — 2023+ has real NRFI odds data for p_nrfi_market feature
+_DATA_START_YEAR = 2023
+
+# Rolling validation window: most recent K days are held out for val/calibration.
+# Everything older is training. Live/future games are never touched.
+_VAL_WINDOW_DAYS = 7
 
 
 def load_feature_dataframe() -> pd.DataFrame:
@@ -145,7 +148,7 @@ def load_feature_dataframe() -> pd.DataFrame:
             .join(Game, NrfiFeatures.game_id == Game.id)
             .filter(
                 NrfiFeatures.nrfi_label.isnot(None),
-                Game.game_date >= f"{_TRAIN_START_YEAR}-01-01",
+                Game.game_date >= f"{_DATA_START_YEAR}-01-01",
             )
             .order_by(Game.game_date)
             .all()
@@ -187,16 +190,22 @@ def date_based_split(
     df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Split by fixed year boundaries to match realistic forward-in-time deployment.
+    Expanding-window + rolling-validation split based on current date.
 
-    Train : 2020–2022  (modern era only)
-    Val   : 2023
-    Test  : 2024–present
+    Train : all completed games from _DATA_START_YEAR up to (today - _VAL_WINDOW_DAYS)
+    Val   : completed games within the most recent _VAL_WINDOW_DAYS days
+    Test  : today and future games (empty at train time — live evaluation only)
+
+    This means completed 2026 games automatically enter training once they age
+    past the validation window. The model is never trained on future games.
     """
-    years = pd.to_datetime(df["game_date"]).dt.year
-    train = df[(years >= _TRAIN_START_YEAR) & (years <= _TRAIN_END_YEAR)]
-    val   = df[years == _VAL_YEAR]
-    test  = df[years >= _TEST_START_YEAR]
+    today = date.today()
+    cutoff = today - timedelta(days=_VAL_WINDOW_DAYS)
+    game_dates = pd.to_datetime(df["game_date"]).dt.date
+
+    train = df[game_dates <= cutoff]
+    val   = df[(game_dates > cutoff) & (game_dates < today)]
+    test  = df[game_dates >= today]
     return train, val, test
 
 
@@ -233,12 +242,18 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     _audit_nrfi_rates(df)
 
     train_df, val_df, test_df = date_based_split(df)
+    today = date.today()
+    cutoff = today - timedelta(days=_VAL_WINDOW_DAYS)
     logger.info(
-        "Split — train: %d (%d–%d)  |  val: %d (%d)  |  test: %d (%d–%d)",
-        len(train_df), _TRAIN_START_YEAR, _TRAIN_END_YEAR,
-        len(val_df),   _VAL_YEAR,
-        len(test_df),  _TEST_START_YEAR, pd.to_datetime(df["game_date"]).dt.year.max(),
+        "Split — train: %d games (through %s)  |  val: %d games (%s – %s)  |  test (live): %d",
+        len(train_df), cutoff,
+        len(val_df), cutoff + timedelta(days=1), today - timedelta(days=1),
+        len(test_df),
     )
+    if len(val_df) < 50:
+        logger.warning(
+            "Val set has only %d games — consider increasing _VAL_WINDOW_DAYS.", len(val_df)
+        )
 
     X_train = train_df[FEATURE_COLS]
     y_train = train_df["nrfi_label"].astype(int)
@@ -317,6 +332,28 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
 
     save_model(calibrated, output_path)
     logger.info("Saved %s to %s", winner_name, output_path)
+
+    # Write metadata so picks can always be traced to the model version that made them
+    winner_val = xgb_val if winner_name == "XGBoost" else lr_val
+    meta = {
+        "trained_at": datetime.now().isoformat(),
+        "winner": winner_name,
+        "val_window_days": _VAL_WINDOW_DAYS,
+        "train_start": str(train_df["game_date"].min()),
+        "train_end": str(train_df["game_date"].max()),
+        "train_games": len(train_df),
+        "val_start": str(val_df["game_date"].min()) if len(val_df) else None,
+        "val_end": str(val_df["game_date"].max()) if len(val_df) else None,
+        "val_games": len(val_df),
+        "val_auc": round(winner_val["auc"], 4),
+        "val_auc_calibrated": round(cal_val["auc"], 4),
+        "val_brier_calibrated": round(cal_val["brier"], 4),
+    }
+    meta_path = Path(output_path).with_suffix(".meta.json")
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+    logger.info("Metadata saved to %s", meta_path)
+
     return calibrated
 
 
