@@ -210,7 +210,10 @@ def date_based_split(
 
 
 def evaluate(label: str, model: Any, X: pd.DataFrame, y: pd.Series) -> dict[str, float]:
-    """Log and return AUC, log loss, and Brier score for a split."""
+    """Log and return AUC, log loss, and Brier score for a split. Returns zeros if empty."""
+    if len(X) == 0:
+        logger.info("%s — (empty split, skipped)", label)
+        return {"auc": 0.0, "log_loss": 0.0, "brier": 0.0}
     probs = model.predict_proba(X)[:, 1]
     auc = roc_auc_score(y, probs)
     ll = log_loss(y, probs)
