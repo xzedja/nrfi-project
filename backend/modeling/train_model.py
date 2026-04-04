@@ -127,9 +127,14 @@ FEATURE_COLS = [
 # Earliest season included — 2023+ has real NRFI odds data for p_nrfi_market feature
 _DATA_START_YEAR = 2023
 
-# Rolling validation window: most recent K days are held out for val/calibration.
-# Everything older is training. Live/future games are never touched.
+# Rolling validation window: most recent K days held out for model selection (LR vs XGB).
 _VAL_WINDOW_DAYS = 7
+
+# Calibration window: the 90 days immediately before the val window, carved out of
+# training, used exclusively for Platt scaling. Needs ~900 games for a stable fit —
+# large enough to cover a wide range of game contexts, recent enough to reflect
+# current-season conditions.
+_CALIB_WINDOW_DAYS = 90
 
 
 def load_feature_dataframe() -> pd.DataFrame:
@@ -188,25 +193,29 @@ def _audit_nrfi_rates(df: pd.DataFrame) -> None:
 
 def date_based_split(
     df: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Expanding-window + rolling-validation split based on current date.
+    Expanding-window split with separate calibration and model-selection sets.
 
-    Train : all completed games from _DATA_START_YEAR up to (today - _VAL_WINDOW_DAYS)
-    Val   : completed games within the most recent _VAL_WINDOW_DAYS days
+    Fit   : all completed games from _DATA_START_YEAR up to (today - val - calib days)
+            — used to fit model weights (LR / XGB)
+    Calib : the _CALIB_WINDOW_DAYS immediately before the val window
+            — used only for Platt scaling; large enough (~900 games) to learn a
+              proper probability mapping across diverse game contexts
+    Val   : the most recent _VAL_WINDOW_DAYS of completed games
+            — used only for model selection (LR vs XGB AUC comparison)
     Test  : today and future games (empty at train time — live evaluation only)
-
-    This means completed 2026 games automatically enter training once they age
-    past the validation window. The model is never trained on future games.
     """
     today = date.today()
-    cutoff = today - timedelta(days=_VAL_WINDOW_DAYS)
-    game_dates = pd.to_datetime(df["game_date"]).dt.date
+    val_cutoff   = today - timedelta(days=_VAL_WINDOW_DAYS)
+    calib_cutoff = val_cutoff - timedelta(days=_CALIB_WINDOW_DAYS)
+    game_dates   = pd.to_datetime(df["game_date"]).dt.date
 
-    train = df[game_dates <= cutoff]
-    val   = df[(game_dates > cutoff) & (game_dates < today)]
+    fit   = df[game_dates <= calib_cutoff]
+    calib = df[(game_dates > calib_cutoff) & (game_dates <= val_cutoff)]
+    val   = df[(game_dates > val_cutoff)   & (game_dates <  today)]
     test  = df[game_dates >= today]
-    return train, val, test
+    return fit, calib, val, test
 
 
 def evaluate(label: str, model: Any, X: pd.DataFrame, y: pd.Series) -> dict[str, float]:
@@ -244,36 +253,42 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
 
     _audit_nrfi_rates(df)
 
-    train_df, val_df, test_df = date_based_split(df)
+    fit_df, calib_df, val_df, test_df = date_based_split(df)
     today = date.today()
-    cutoff = today - timedelta(days=_VAL_WINDOW_DAYS)
+    val_cutoff   = today - timedelta(days=_VAL_WINDOW_DAYS)
+    calib_cutoff = val_cutoff - timedelta(days=_CALIB_WINDOW_DAYS)
     logger.info(
-        "Split — train: %d games (through %s)  |  val: %d games (%s – %s)  |  test (live): %d",
-        len(train_df), cutoff,
-        len(val_df), cutoff + timedelta(days=1), today - timedelta(days=1),
+        "Split — fit: %d games (through %s)  |  calib: %d games (%s – %s)"
+        "  |  val: %d games (last %d days)  |  test (live): %d",
+        len(fit_df),   calib_cutoff,
+        len(calib_df), calib_cutoff + timedelta(days=1), val_cutoff,
+        len(val_df),   _VAL_WINDOW_DAYS,
         len(test_df),
     )
-    if len(val_df) < 50:
-        logger.warning(
-            "Val set has only %d games — consider increasing _VAL_WINDOW_DAYS.", len(val_df)
-        )
+    if len(calib_df) < 100:
+        logger.warning("Calib set has only %d games — Platt scaling may be unstable.", len(calib_df))
+    if len(val_df) < 20:
+        logger.warning("Val set has only %d games — model selection may be unreliable.", len(val_df))
 
-    X_train = train_df[FEATURE_COLS]
-    y_train = train_df["nrfi_label"].astype(int)
-    X_val = val_df[FEATURE_COLS]
-    y_val = val_df["nrfi_label"].astype(int)
-    X_test = test_df[FEATURE_COLS]
-    y_test = test_df["nrfi_label"].astype(int)
+    X_fit   = fit_df[FEATURE_COLS]
+    y_fit   = fit_df["nrfi_label"].astype(int)
+    X_calib = calib_df[FEATURE_COLS]
+    y_calib = calib_df["nrfi_label"].astype(int)
+    X_val   = val_df[FEATURE_COLS]
+    y_val   = val_df["nrfi_label"].astype(int)
+    X_test  = test_df[FEATURE_COLS]
+    y_test  = test_df["nrfi_label"].astype(int)
 
     # -----------------------------------------------------------------------
-    # Baseline: logistic regression
+    # Baseline: logistic regression (fit on fit set, evaluate on calib + val)
     # -----------------------------------------------------------------------
     logger.info("--- Logistic Regression (baseline) ---")
     lr_model = _build_logistic_pipeline()
-    lr_model.fit(X_train, y_train)
-    evaluate("LR  Train", lr_model, X_train, y_train)
-    lr_val = evaluate("LR  Val  ", lr_model, X_val, y_val)
-    lr_test = evaluate("LR  Test ", lr_model, X_test, y_test)
+    lr_model.fit(X_fit, y_fit)
+    evaluate("LR  Fit  ", lr_model, X_fit,   y_fit)
+    evaluate("LR  Calib", lr_model, X_calib, y_calib)
+    lr_val  = evaluate("LR  Val  ", lr_model, X_val,  y_val)
+    evaluate("LR  Test ", lr_model, X_test,  y_test)
 
     coefs = lr_model.named_steps["clf"].coef_[0]
     logger.info("LR feature coefficients (positive = increases P(NRFI)):")
@@ -281,14 +296,15 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
         logger.info("  %-45s  %+.4f", feat, coef)
 
     # -----------------------------------------------------------------------
-    # XGBoost with early stopping on validation set
+    # XGBoost with early stopping on calib set
     # -----------------------------------------------------------------------
-    logger.info("--- XGBoost (early stopping on val set) ---")
+    logger.info("--- XGBoost (early stopping on calib set) ---")
     xgb_model = XGBModel()
-    xgb_model.fit(X_train, y_train, X_val=X_val, y_val=y_val)
-    evaluate("XGB Train", xgb_model, X_train, y_train)
+    xgb_model.fit(X_fit, y_fit, X_val=X_calib, y_val=y_calib)
+    evaluate("XGB Fit  ", xgb_model, X_fit,   y_fit)
+    evaluate("XGB Calib", xgb_model, X_calib, y_calib)
     xgb_val = evaluate("XGB Val  ", xgb_model, X_val, y_val)
-    xgb_test = evaluate("XGB Test ", xgb_model, X_test, y_test)
+    evaluate("XGB Test ", xgb_model, X_test,  y_test)
 
     importances = xgb_model.clf_.feature_importances_
     logger.info("XGBoost feature importances (gain):")
@@ -296,9 +312,9 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
         logger.info("  %-45s  %.4f", feat, imp)
 
     # -----------------------------------------------------------------------
-    # Summary comparison
+    # Summary comparison (val set — most recent 7 days)
     # -----------------------------------------------------------------------
-    logger.info("--- Comparison (Val set) ---")
+    logger.info("--- Comparison (Val set — last %d days) ---", _VAL_WINDOW_DAYS)
     logger.info(
         "  Logistic Regression — AUC: %.4f  |  Brier: %.4f",
         lr_val["auc"], lr_val["brier"],
@@ -318,20 +334,15 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     logger.info("Winner: %s (val AUC %.4f)", winner_name, (xgb_val if winner_name == "XGBoost" else lr_val)["auc"])
 
     # -----------------------------------------------------------------------
-    # Calibrate winner with Platt scaling on val set
+    # Calibrate winner with Platt scaling on calib set (~900 diverse games)
     # -----------------------------------------------------------------------
-    logger.info("Calibrating %s on val set...", winner_name)
-    raw_val_probs = winner.predict_proba(X_val)[:, 1].reshape(-1, 1)
+    logger.info("Calibrating %s on calib set (%d games)...", winner_name, len(calib_df))
+    raw_calib_probs = winner.predict_proba(X_calib)[:, 1].reshape(-1, 1)
     platt = _PlattLR(C=1.0, max_iter=1000)
-    platt.fit(raw_val_probs, y_val)
+    platt.fit(raw_calib_probs, y_calib)
     calibrated = CalibratedModel(winner, platt)
-    cal_val  = evaluate("Calibrated Val ", calibrated, X_val,  y_val)
-    cal_test = evaluate("Calibrated Test", calibrated, X_test, y_test)
-    logger.info(
-        "Calibration effect on Brier (test): %.4f → %.4f",
-        (xgb_test if winner_name == "XGBoost" else lr_test)["brier"],
-        cal_test["brier"],
-    )
+    cal_calib = evaluate("Calibrated Calib", calibrated, X_calib, y_calib)
+    cal_val   = evaluate("Calibrated Val  ", calibrated, X_val,   y_val)
 
     save_model(calibrated, output_path)
     logger.info("Saved %s to %s", winner_name, output_path)
@@ -342,13 +353,19 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
         "trained_at": datetime.now().isoformat(),
         "winner": winner_name,
         "val_window_days": _VAL_WINDOW_DAYS,
-        "train_start": str(train_df["game_date"].min()),
-        "train_end": str(train_df["game_date"].max()),
-        "train_games": len(train_df),
+        "calib_window_days": _CALIB_WINDOW_DAYS,
+        "fit_start": str(fit_df["game_date"].min()),
+        "fit_end": str(fit_df["game_date"].max()),
+        "fit_games": len(fit_df),
+        "calib_start": str(calib_df["game_date"].min()) if len(calib_df) else None,
+        "calib_end": str(calib_df["game_date"].max()) if len(calib_df) else None,
+        "calib_games": len(calib_df),
         "val_start": str(val_df["game_date"].min()) if len(val_df) else None,
         "val_end": str(val_df["game_date"].max()) if len(val_df) else None,
         "val_games": len(val_df),
         "val_auc": round(winner_val["auc"], 4),
+        "calib_auc_calibrated": round(cal_calib["auc"], 4),
+        "calib_brier_calibrated": round(cal_calib["brier"], 4),
         "val_auc_calibrated": round(cal_val["auc"], 4),
         "val_brier_calibrated": round(cal_val["brier"], 4),
     }
