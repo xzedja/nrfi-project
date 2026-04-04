@@ -11,6 +11,7 @@ Primary functions:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date
 from typing import Any
 
@@ -18,19 +19,25 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from backend.db.models import Game, NrfiFeatures, Odds
-from backend.modeling.model_store import load_model
+from backend.modeling.model_store import DEFAULT_MODEL_PATH, load_model
 from backend.modeling.train_model import FEATURE_COLS
 
 logger = logging.getLogger(__name__)
 
-# Module-level model cache — loaded once on first prediction call
+# Module-level model cache — reloaded automatically when the pkl file changes
 _model = None
+_model_mtime: float | None = None
 
 
 def _get_model():
-    global _model
-    if _model is None:
+    global _model, _model_mtime
+    try:
+        current_mtime = os.path.getmtime(DEFAULT_MODEL_PATH)
+    except OSError:
+        current_mtime = None
+    if _model is None or current_mtime != _model_mtime:
         _model = load_model()
+        _model_mtime = current_mtime
     return _model
 
 

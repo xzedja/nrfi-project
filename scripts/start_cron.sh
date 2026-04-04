@@ -12,12 +12,14 @@ set -euo pipefail
 printenv | grep -v "^_=" > /etc/environment
 
 # Write the crontab
+# 1st of month, 8:00 AM — retrain model (runs before daily pipeline; predict.py auto-reloads on next call)
 # 8:30 AM       — morning pipeline (schedule + features + odds + Discord post)
 # 10 AM – 7 PM  — hourly lineup refresh (scans for newly posted batting orders)
 # 12:00 PM      — odds refresh (posts update for any games that had N/A edges at 9 AM)
 # 4:00 PM       — odds refresh (catches any remaining N/A games before first pitch)
 # 2:00 AM       — post-game results (fill in first-inning outcomes for completed games)
 (
+  echo "0 8 1 * * . /etc/environment; cd /app && python -m backend.modeling.train_model >> /app/logs/retrain.log 2>&1"
   echo "30 8 * * * . /etc/environment; cd /app && python scripts/run_daily.py >> /app/logs/daily.log 2>&1"
   echo "0 10-19 * * * . /etc/environment; cd /app && python scripts/refresh_lineups.py >> /app/logs/lineups.log 2>&1"
   echo "0 12 * * * . /etc/environment; cd /app && python scripts/refresh_odds.py >> /app/logs/odds_refresh.log 2>&1"

@@ -146,15 +146,19 @@ Daily pipeline (runs at 9:03 AM Pacific via Docker cron scheduler — `TZ: Ameri
 - Posts today's picks as Discord embeds — one per game, sorted highest edge first.
 - Embed title: `{away} @ {home}  ·  {time ET} / {time CT} / {time PT}` (game time shown in all three US timezones).
 - Each embed shows: pitcher matchup, NRFI/YRFI American odds, `Model X% · Mkt Y% · Edge +Z%`, plus a plain-English recommendation.
-- Recommendation tiers: 🟢 Bet NRFI (≥+2%), 🟡 Lean NRFI (0–2%), 🟡 Lean YRFI (0 to -2%), 🔴 Fade NRFI (≤-2%).
-- Color-coded: green = value play, yellow = lean, red = negative edge, gray = no market data.
+- Recommendation tiers: 🟢 Bet NRFI (≥+2%), 🟡 Lean NRFI (0–2%), 🔵 YRFI signal (market ≥60% NRFI), 🟡 Lean YRFI (0 to -2%), 🔴 Fade NRFI (≤-2%), ⚪ No edge.
+- Color-coded: green = value play, yellow = lean, **blue = YRFI signal (market ≥60% NRFI — bet YRFI)**, red = negative edge, gray = no market data.
 - `VALUE_PLAY_THRESHOLD` read from `VALUE_PLAY_THRESHOLD_PP` env var (default: 2 pp).
+- `_EDGE_ZERO_THRESHOLD = 0.001` — edges smaller than 0.1% shown as gray (early-season anchor).
 - Game times sourced from `Game.game_time` (stored by `run_daily.py`), converted from UTC to ET/CT/PT via `zoneinfo`.
 
 ### `scripts/post_results.py`
 - Posts yesterday's results and season-to-date record to Discord.
-- Only tracks games where the model had **positive edge** (edge > 0) as picks.
-- Two embeds: yesterday's game-by-game results + season W-L for all plays and value plays.
+- Tracks two separate signals:
+  - **Model picks**: games where edge > 0. Embeds: yesterday's results + season W-L (all plays + value plays).
+  - **YRFI signal**: games where `p_nrfi_market >= 0.60` regardless of model edge. Bet YRFI on these. Historically +46–54% ROI.
+- Three embeds total: yesterday's NRFI results, season model record, season YRFI signal record.
+- `YRFI_SIGNAL_THRESHOLD` env var controls the 60% cutoff (default 0.60).
 
 ### `scripts/entrypoint.sh`
 - Runs on backend container startup.
@@ -188,16 +192,20 @@ See `backend/modeling/train_model.py` for the full list. All features including 
 
 ### `train_model.py`
 - Trains **both** logistic regression (LR) and XGBoost (XGB), prints side-by-side metrics.
-- Saves whichever model wins on **validation AUC**.
-- Chronological 80/10/10 train/val/test split (no shuffling).
-- LR pipeline: `SimpleImputer(median)` → `StandardScaler` → `LogisticRegression(max_iter=1000)`
-- XGB pipeline: `SimpleImputer(median)` → `XGBClassifier` with strong regularisation to prevent overfitting:
-  - `max_depth=3`, `min_child_weight=80`, `gamma=1.0`, `reg_alpha=0.5`, `reg_lambda=5.0`
+- Saves whichever model wins on **validation AUC**, Platt-calibrated on the val set.
+- Chronological split: **train 2023–2024, val 2025, test 2026+** (no shuffling).
+- LR pipeline: `SeasonStartImputer` → `StandardScaler` → `LogisticRegression(max_iter=1000)`
+- XGB pipeline: `SeasonStartImputer` → `XGBClassifier` with strong regularisation:
+  - `max_depth=3`, `min_child_weight=60`, `gamma=0.5`, `reg_alpha=0.3`, `reg_lambda=2.0`
+- Winner is Platt-calibrated using a logistic regression fit on val set raw scores → saved as `CalibratedModel`.
 - Evaluates AUC, log loss, Brier score on all three splits.
-- Logs LR feature coefficients and XGB feature importances.
+- **Current trained model: Logistic Regression** (val AUC 0.5212 vs XGB 0.5180). XGB was overfitting badly (train AUC 0.6449, test AUC 0.4597). LR generalises consistently: 0.5515 → 0.5212 → 0.5205.
+- Retrain manually: `python -m backend.modeling.train_model` inside the Docker container.
+- **Delta model (XGBRegressor on residual y' = nrfi_label - p_nrfi_market) was tried and reverted.** It produced uniform YRFI bias at season start because without Statcast data all features impute to median, outputting a constant ~-10% delta for every game. Do not reintroduce until rolling pitcher features are populated (typically 5–6 weeks into season).
 
 ### `model_classes.py`
-- Defines `XGBModel` and `CalibratedModel` used by the pickle. Must be importable at load time.
+- Defines `SeasonStartImputer`, `XGBModel`, and `CalibratedModel` used by the pickle. Must be importable at load time.
+- `SeasonStartImputer` — two-pass imputer: proxy-fills NULL rolling stats with prior-season equivalents (e.g. `last5_era → era`), then median-fills anything remaining.
 - Do NOT move or rename these classes — pickle load will break.
 
 ### `model_store.py`
@@ -219,6 +227,47 @@ See `backend/modeling/train_model.py` for the full list. All features including 
 - Park factors use only data from seasons prior to the target game's season.
 
 If there is any ambiguity, default to the safer "no leakage" choice.
+
+## YRFI Heavy-Favorite Signal
+
+A structural market inefficiency discovered via backtest (2023–2025, 2,700+ bets):
+- When the market implies **≥60% probability of NRFI**, the actual NRFI rate is only ~48–54%
+- Betting YRFI on these games produces **+46–54% ROI** historically (2023: +54.65%, 2024: +46.34%)
+- The signal is market-driven and requires no model — just `p_nrfi_market >= 0.60`
+- 2025 sample is only 39 bets (system went live mid-season) — insufficient to confirm trend
+- Tracked in `post_results.py` (third embed) and shown as 🔵 blue in Discord picks/bot
+- `_YRFI_SIGNAL_THRESHOLD = 0.60` in both `post_discord.py` and `discord_bot.py`
+
+## Historical Odds Backfill
+
+`scripts/backfill_historical_odds.py` — hybrid backfill of `p_nrfi_market` for historical games.
+
+**Two paths:**
+- **Actual path** (recent dates): fetches real NRFI/YRFI lines from The Odds API historical endpoint, blends 80% actual + 20% Poisson. Costs ~151 API credits per game day.
+- **Poisson path** (older dates): derives `p_nrfi_market` from game total via Poisson approximation. Costs ~1 credit per day.
+
+**Coverage notes (as of April 2026):**
+- 2023–2024: good coverage of actual first-inning odds
+- 2025: patchy — only April and July have actual first-inning odds in The Odds API historical archive. May, June, August, September return empty.
+- Backfill was stopped mid-July 2025 to preserve API credits (~8,400 remaining needed for live pipeline ~450 credits/day)
+
+**Re-run when API credits reset:**
+```bash
+# Dry run first to estimate credit cost
+docker exec -it nrfi-project-backend-1 python scripts/backfill_historical_odds.py \
+  --start 2025-03-27 --end 2025-09-28 --recent-days 365 --dry-run
+
+# Full run (omit --dry-run)
+docker exec -it nrfi-project-backend-1 python scripts/backfill_historical_odds.py \
+  --start 2025-03-27 --end 2025-09-28 --recent-days 365
+```
+
+The script is idempotent — skips rows that already have `p_nrfi_market` unless `--overwrite` is passed.
+
+After backfill, re-run the backtest to see updated 2025 YRFI signal sample:
+```bash
+docker exec -it nrfi-project-backend-1 python scripts/backtest.py --real-odds-only --start 2023 --end 2025
+```
 
 ## DB Migration Pattern
 

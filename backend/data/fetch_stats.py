@@ -49,7 +49,12 @@ _STATCAST_COLS = [
 def _season_date_range(season: int) -> tuple[date, date]:
     """Return approximate start/end dates covering a full MLB season."""
     # Opening day is typically late March; season ends early October (or later for playoffs)
-    return date(season, 4, 1), date(season, 10, 5)
+    start = date(season, 4, 1)
+    end = date(season, 10, 5)
+    # For the current season, cap at yesterday — no point fetching future chunks
+    if season == date.today().year:
+        end = min(end, date.today() - timedelta(days=1))
+    return start, end
 
 
 def _fetch_statcast_season(season: int) -> pd.DataFrame:

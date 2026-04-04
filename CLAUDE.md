@@ -11,7 +11,7 @@ Goals:
 - Expose a FastAPI backend that the frontend can call
 - Post daily picks and results to Discord
 
-**Current status:** Full backend is implemented and operational. Historical data backfill (2015–present), feature building, model training, odds ingestion, daily pipeline, Discord integration, and API endpoints are all working.
+**Current status:** Full backend is implemented and operational. Historical data backfill (2015–present), feature building, model training, odds ingestion, daily pipeline, Discord integration, and API endpoints are all working. A YRFI heavy-favorite signal has been identified and is tracked separately from model picks.
 
 ## Tech Stack
 
@@ -101,9 +101,13 @@ All phases below are done. New work should extend, not rebuild them.
 20. ✅ Discord picks show pitcher names, NRFI/YRFI odds, game times in ET/CT/PT, and color-coded edge tiers
 21. ✅ Pitcher rest days (`home_sp_days_rest`, `away_sp_days_rest`) as model feature; backfilled via `backfill_pitcher_rest.py`
 22. ✅ `game_time` stored on `Game` rows and displayed in Discord embeds
+23. ✅ YRFI heavy-favorite signal identified — market 60%+ NRFI implied → bet YRFI. Historically +46–54% ROI (2023–2024, 2,700+ bets). Tracked separately in `post_results.py` and displayed as 🔵 blue embeds in Discord picks.
+24. ✅ Discord bot (`scripts/discord_bot.py`) with slash commands: `/display-picks`, `/today-record`, `/tomorrow-picks`, `/yrfi-signals`, `/season-record`, `/refresh-odds`, `/yesterday-picks`
+25. ✅ Historical odds backfill script (`scripts/backfill_historical_odds.py`) — hybrid approach: actual NRFI lines for recent dates (blended 80/20 with Poisson), Poisson-only for older dates. Costs ~151 API credits/day for actual path. Run when API credits reset.
 
 ## Known Gaps (not yet implemented)
 
 - No automated model retraining — must be triggered manually (`python -m backend.modeling.train_model`)
 - CORS allows all origins (`*`) — tighten when frontend domain is known
-- No historical NRFI odds — `p_nrfi_market` only populated for current-season games going forward (historical API coverage too sparse)
+- 2025 historical NRFI odds backfill is partial — The Odds API only has first-inning market data for April and July 2025; other months return empty. Backfill was stopped to preserve API credits. Re-run `backfill_historical_odds.py` when credits reset (see below).
+- 2025 YRFI signal sample is small (39 bets) — not enough to confirm if edge is holding. Will grow naturally through 2026 live data capture.
