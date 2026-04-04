@@ -66,7 +66,8 @@ _MAX_EMBEDS_PER_REQUEST = 10
 _VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 100.0
 
 
-_EDGE_ZERO_THRESHOLD = 0.001  # treat |edge| < 0.1% as effectively zero (early-season anchor)
+_EDGE_ZERO_THRESHOLD = 0.001        # treat |edge| < 0.1% as effectively zero (early-season anchor)
+_HIGH_DISAGREEMENT_THRESHOLD = 0.07  # flag large model-market gaps as diagnostic
 
 
 def _edge_color(edge: float | None, market: float | None = None) -> int:
@@ -79,30 +80,35 @@ def _edge_color(edge: float | None, market: float | None = None) -> int:
     if edge > 0:
         return _COLOR_YELLOW
     if market is not None and market >= 0.60:
-        return _COLOR_BLUE   # YRFI lean on heavy favorite
+        return _COLOR_BLUE   # YRFI signal on heavy favorite — market-driven, not model
     return _COLOR_RED
 
 
 def _recommendation(edge: float, model: float, market: float | None = None) -> str:
-    """Concise read on whether to bet NRFI, lean, or fade."""
+    """Concise read on the model lean. Model picks are experimental; YRFI signal is market-driven."""
     edge_pct = f"{abs(edge) * 100:.0f}%"
+    # Large disagreements are more likely model error than real edge — flag them
+    diagnostic_note = (
+        "\n*(Gap this large is often a model data issue — treat as diagnostic, not a bet)*"
+        if abs(edge) >= _HIGH_DISAGREEMENT_THRESHOLD else ""
+    )
 
     if abs(edge) < _EDGE_ZERO_THRESHOLD:
         return "⚪ **No model edge** — anchored to market (early-season, no in-season data yet)"
     elif edge >= _VALUE_PLAY_THRESHOLD:
-        return f"🟢 **Model strongly favors NRFI** — {edge_pct} above market"
+        return f"🟢 **Model leans NRFI** — {edge_pct} above market{diagnostic_note}"
     elif edge > 0:
-        return f"🟡 **Model leans NRFI** — slight disagreement with market"
+        return "🟡 **Model leans NRFI** — slight disagreement with market"
     elif market is not None and market >= 0.60:
         edge_pct_mkt = f"{market * 100:.0f}%"
         return (
-            f"🔵 **Lean YRFI** — market prices NRFI at {edge_pct_mkt} but historically "
-            f"heavy favorites go NRFI only ~48–54%. Value may be on YRFI at these odds."
+            f"🔵 **YRFI signal** — market prices NRFI at {edge_pct_mkt} but historically "
+            f"heavy favorites go NRFI only ~48–54%. +46–54% ROI over 2,700 bets (2023–24)."
         )
     elif edge > -_VALUE_PLAY_THRESHOLD:
-        return f"🟡 **Model leans YRFI** — market more confident in NRFI than model"
+        return "🟡 **Model leans YRFI** — market more confident in NRFI than model"
     else:
-        return f"🔴 **Model strongly favors YRFI** — {edge_pct} below market"
+        return f"🔴 **Model leans YRFI** — {edge_pct} below market{diagnostic_note}"
 
 
 def _fmt_odds(o: int | None) -> str:
@@ -194,13 +200,13 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
 
     parts = [f"{total} games today"]
     if value_plays:
-        parts.append(f"**{value_plays} value play{'s' if value_plays != 1 else ''}**")
+        parts.append(f"{value_plays} model lean{'s' if value_plays != 1 else ''} NRFI")
     if leans:
-        parts.append(f"{leans} lean{'s' if leans != 1 else ''}")
+        parts.append(f"{leans} slight lean{'s' if leans != 1 else ''}")
     if anchored:
         parts.append(f"{anchored} anchored to market")
     if shadow_yrfi:
-        parts.append(f"🔵 {shadow_yrfi} YRFI lean{'s' if shadow_yrfi != 1 else ''}")
+        parts.append(f"🔵 {shadow_yrfi} YRFI signal{'s' if shadow_yrfi != 1 else ''}")
     if no_lines:
         parts.append(f"{no_lines} no lines yet")
 
@@ -211,9 +217,10 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
         d = date.fromisoformat(target_date)
         if d.month < 4 or (d.month == 4 and d.day < 15):
             description += (
-                "\n\n⚠️ **Early-season notice:** Predictions are based primarily on "
-                "prior-season stats since most pitchers haven't accumulated enough 2026 "
-                "starts yet for current-form data. Confidence will improve as the season progresses."
+                "\n\n⚠️ **Early-season model:** Driven primarily by 2025 prior-season stats. "
+                "Model leans are experimental — no positive edge on model picks vs NRFI lines "
+                "has been confirmed yet. 🔵 YRFI signals are market-based (+46–54% ROI historically) "
+                "and remain active regardless of model confidence."
             )
     except Exception:
         pass
@@ -222,7 +229,7 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
         "title": f"NRFI Picks — {target_date}",
         "description": description,
         "color": _COLOR_BLUE,
-        "footer": {"text": "Model% = predicted probability of no run in the 1st inning. Mkt% = sportsbook implied probability. Edge = how much our model disagrees with the market."},
+        "footer": {"text": "Model% = predicted NRFI probability. Mkt% = sportsbook implied probability. Edge = model vs market gap. Model leans are experimental; 🔵 YRFI signals are market-driven."},
     }
 
 
