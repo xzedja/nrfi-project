@@ -91,6 +91,7 @@ When extending the schema, add columns via a migration script in `scripts/` usin
 - `_STATCAST_COLS` — columns kept from Statcast responses. Includes `release_speed` and `events` (needed for rolling velocity + WHIP features).
 - `_season_cache` — in-process dict to avoid re-fetching Statcast data within the same Python process.
 - `_fetch_statcast_season(season)` — fetches Statcast in ~4-week chunks, uses disk cache via `pybaseball.cache.enable()`. Season start is **April 1** (not March 20) to exclude spring training.
+- **Date cap for current season**: `_season_date_range` caps the end date at `date.today() - timedelta(days=1)` when `season == date.today().year`. This prevents fetching empty future chunks on daily pipeline runs (avoids ~6 wasted API calls per run mid-season).
 - `load_games_for_season(season)` — returns list of game dicts with first-inning run counts and NRFI label.
 - `load_starting_pitchers_for_season(season)` — returns dict of game_pk → home/away SP MLBAM IDs.
 - SP identification: pitcher of the first pitch in Top of 1st = home SP; first pitch in Bot of 1st = away SP.
@@ -106,6 +107,17 @@ When extending the schema, add columns via a migration script in `scripts/` usin
 ### `backend/data/fetch_today.py`
 - Fetches today's schedule + probable starters from MLB Stats API.
 - Filters to game types R/P/F/D/L/W (skips spring training type S).
+
+### `backend/data/fetch_lineups.py`
+- Fetches actual batting orders from MLB Stats API boxscore endpoint after lineups are posted (typically 3–4 hours before game time).
+- `update_lineup_obp_for_date(target_date)` — loads prior-season Fangraphs batting OBP, maps MLB IDs to Fangraphs IDs, computes average OBP for the starting 9, writes `home_lineup_obp` / `away_lineup_obp` to `nrfi_features`.
+- Called by `scripts/refresh_lineups.py` hourly from 10 AM–7 PM.
+- Lineup OBP features are NULL at the 8:30 AM pipeline run — model falls back to median via `SeasonStartImputer` until lineups post.
+
+### `scripts/refresh_lineups.py`
+- Hourly lineup refresh (10 AM–7 PM via cron in `start_cron.sh`).
+- Checks for games with `home_lineup_obp IS NULL` for today, calls `update_lineup_obp_for_date`, no-op if all games already have data.
+- `home_lineup_obp`, `away_lineup_obp`, and derived `lineup_obp_diff` (away minus home) are all active features in `FEATURE_COLS`.
 
 ### `backend/data/fetch_odds.py`
 - `_TEAM_NAME_TO_ABBREV` — maps The Odds API full team names → Statcast abbreviations. Includes `"Athletics": "ATH"`.
@@ -132,7 +144,9 @@ Daily pipeline (runs at 9:03 AM Pacific via Docker cron scheduler — `TZ: Ameri
 ### `scripts/start_cron.sh`
 - Dumps container env vars to `/etc/environment` so cron jobs can access `DATABASE_URL` etc.
 - Installs crontab:
-  - `3 9 * * *` → `run_daily.py` (morning pipeline)
+  - `0 8 * * 0` → `train_model.py` (weekly retrain, Sundays at 8:00 AM — before daily pipeline)
+  - `30 8 * * *` → `run_daily.py` (morning pipeline at 8:30 AM)
+  - `0 10-19 * * *` → `refresh_lineups.py` (hourly lineup refresh, 10 AM–7 PM)
   - `0 12 * * *` → `refresh_odds.py` (noon odds refresh)
   - `0 16 * * *` → `refresh_odds.py` (4 PM odds refresh)
   - `0 2 * * *` → `backfill_game_results.py` (nightly results fill)
@@ -143,13 +157,18 @@ Daily pipeline (runs at 9:03 AM Pacific via Docker cron scheduler — `TZ: Ameri
 - No-op if all games already have odds.
 
 ### `scripts/post_discord.py`
-- Posts today's picks as Discord embeds — one per game, sorted highest edge first.
+- Posts today's picks as Discord embeds — one per game.
+- **Sort order**: by signal tier first (🟢→🟡 NRFI→🔵 YRFI→🟡 YRFI→🔴→⚪ no edge), then by game time (ascending) within each tier.
 - Embed title: `{away} @ {home}  ·  {time ET} / {time CT} / {time PT}` (game time shown in all three US timezones).
 - Each embed shows: pitcher matchup, NRFI/YRFI American odds, `Model X% · Mkt Y% · Edge +Z%`, plus a plain-English recommendation.
-- Recommendation tiers: 🟢 Bet NRFI (≥+2%), 🟡 Lean NRFI (0–2%), 🔵 YRFI signal (market ≥60% NRFI), 🟡 Lean YRFI (0 to -2%), 🔴 Fade NRFI (≤-2%), ⚪ No edge.
-- Color-coded: green = value play, yellow = lean, **blue = YRFI signal (market ≥60% NRFI — bet YRFI)**, red = negative edge, gray = no market data.
+- **Two distinct signals — messaging is intentionally different:**
+  - 🟢/🟡 **Model leans** (experimental): labeled as leans, not bets. Historical ROI not confirmed.
+  - 🔵 **YRFI signal** (market-driven): confident framing with ROI data. Fires when `p_nrfi_market >= 0.60` regardless of model edge.
+- `_HIGH_DISAGREEMENT_THRESHOLD = 0.07` — edges ≥7% trigger a diagnostic note ("likely model data issue, not a bet").
+- Color-coded: green = model leans NRFI (≥+2%), yellow = slight lean, **blue = YRFI signal**, red = model leans YRFI, gray = no market data / anchored.
 - `VALUE_PLAY_THRESHOLD` read from `VALUE_PLAY_THRESHOLD_PP` env var (default: 2 pp).
-- `_EDGE_ZERO_THRESHOLD = 0.001` — edges smaller than 0.1% shown as gray (early-season anchor).
+- `_EDGE_ZERO_THRESHOLD = 0.001` — edges smaller than 0.1% shown as gray (early-season anchor, all features at median).
+- Early-season header notice (before April 15) explicitly states YRFI signals remain active regardless of model confidence.
 - Game times sourced from `Game.game_time` (stored by `run_daily.py`), converted from UTC to ET/CT/PT via `zoneinfo`.
 
 ### `scripts/post_results.py`
@@ -192,16 +211,27 @@ See `backend/modeling/train_model.py` for the full list. All features including 
 
 ### `train_model.py`
 - Trains **both** logistic regression (LR) and XGBoost (XGB), prints side-by-side metrics.
-- Saves whichever model wins on **validation AUC**, Platt-calibrated on the val set.
-- Chronological split: **train 2023–2024, val 2025, test 2026+** (no shuffling).
+- Saves whichever model wins on **validation AUC**, Platt-calibrated on the calib set.
+- **Dynamic expanding window split** (no hardcoded years):
+  - `_DATA_START_YEAR = 2023` — earliest season included in training data
+  - `_CALIB_WINDOW_DAYS = 365` — Platt calibration set spans the last full year (always reaches into prior season regardless of calendar position; 365 days avoids the offseason gap problem of smaller windows)
+  - `_VAL_WINDOW_DAYS = 7` — model selection set is the last 7 days of completed games
+  - **Fit set**: all games from `_DATA_START_YEAR` through `calib_cutoff`
+  - **Calib set**: `calib_cutoff` to `val_cutoff` (~2,400+ games in season, ~365 days)
+  - **Val set**: last 7 days of completed games (model selection)
+  - **Test set**: today's games (empty for in-season picks; guarded against empty-set crash)
+  - The fit set automatically grows each week as games age past the 7-day val window
 - LR pipeline: `SeasonStartImputer` → `StandardScaler` → `LogisticRegression(max_iter=1000)`
 - XGB pipeline: `SeasonStartImputer` → `XGBClassifier` with strong regularisation:
   - `max_depth=3`, `min_child_weight=60`, `gamma=0.5`, `reg_alpha=0.3`, `reg_lambda=2.0`
-- Winner is Platt-calibrated using a logistic regression fit on val set raw scores → saved as `CalibratedModel`.
-- Evaluates AUC, log loss, Brier score on all three splits.
-- **Current trained model: Logistic Regression** (val AUC 0.5212 vs XGB 0.5180). XGB was overfitting badly (train AUC 0.6449, test AUC 0.4597). LR generalises consistently: 0.5515 → 0.5212 → 0.5205.
+- Winner is Platt-calibrated using a logistic regression fit on calib set raw scores → saved as `CalibratedModel`.
+- Evaluates AUC, log loss, Brier score on all splits; empty splits (e.g. empty test set) are skipped safely.
+- Saves training metadata to `models/nrfi_model.meta.json`: training date ranges, game counts, AUC, Brier per split.
+- **Current trained model: Logistic Regression** (val AUC ~0.55). LR generalises consistently; XGB overfits (high train AUC, low test AUC).
 - Retrain manually: `python -m backend.modeling.train_model` inside the Docker container.
+- Retrain automatically: every Sunday at 8:00 AM via cron (before daily pipeline at 8:30 AM).
 - **Delta model (XGBRegressor on residual y' = nrfi_label - p_nrfi_market) was tried and reverted.** It produced uniform YRFI bias at season start because without Statcast data all features impute to median, outputting a constant ~-10% delta for every game. Do not reintroduce until rolling pitcher features are populated (typically 5–6 weeks into season).
+- **Platt calibration pitfall**: do NOT shrink `_CALIB_WINDOW_DAYS` below ~180. Smaller windows during the offseason span Dec–Feb (near-zero MLB games), giving the Platt scaler only 30–70 games to fit on — output collapses to a single probability with no spread.
 
 ### `model_classes.py`
 - Defines `SeasonStartImputer`, `XGBModel`, and `CalibratedModel` used by the pickle. Must be importable at load time.
@@ -213,7 +243,7 @@ See `backend/modeling/train_model.py` for the full list. All features including 
 - Default path: `models/nrfi_model.pkl`
 
 ### `predict.py`
-- Module-level `_model` cache to avoid reloading on every request.
+- Module-level `_model` / `_model_mtime` cache — auto-reloads when the pkl file changes on disk. No container restart needed after retraining; the next prediction call picks up the new model automatically.
 - `predict_for_game(game_id, db)` — returns `p_nrfi_model`, `p_nrfi_market`, `edge`.
 - `predict_for_today(db)` — returns predictions for all today's games.
 

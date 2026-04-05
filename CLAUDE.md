@@ -104,10 +104,15 @@ All phases below are done. New work should extend, not rebuild them.
 23. ✅ YRFI heavy-favorite signal identified — market 60%+ NRFI implied → bet YRFI. Historically +46–54% ROI (2023–2024, 2,700+ bets). Tracked separately in `post_results.py` and displayed as 🔵 blue embeds in Discord picks.
 24. ✅ Discord bot (`scripts/discord_bot.py`) with slash commands: `/display-picks`, `/today-record`, `/tomorrow-picks`, `/yrfi-signals`, `/season-record`, `/refresh-odds`, `/yesterday-picks`
 25. ✅ Historical odds backfill script (`scripts/backfill_historical_odds.py`) — hybrid approach: actual NRFI lines for recent dates (blended 80/20 with Poisson), Poisson-only for older dates. Costs ~151 API credits/day for actual path. Run when API credits reset.
+26. ✅ Lineup OBP features — `home_lineup_obp` / `away_lineup_obp` in `NrfiFeatures`; updated hourly by `refresh_lineups.py` from actual batting orders via MLB Stats API boxscore endpoint. `lineup_obp_diff` (away minus home) is a derived interaction feature in the model.
+27. ✅ Dynamic train/calib/val split in `train_model.py` — expanding window based on current date instead of hardcoded years. Constants: `_DATA_START_YEAR=2023`, `_CALIB_WINDOW_DAYS=365`, `_VAL_WINDOW_DAYS=7`. Fit set grows with every passing week; calib set always spans ~1 full prior season for stable Platt scaling.
+28. ✅ Weekly automated model retraining — cron fires every Sunday at 8:00 AM (before 8:30 AM daily pipeline) via `start_cron.sh`. Model pkl auto-reloads in `predict.py` on next prediction call after file changes — no container restart needed.
+29. ✅ Model metadata saved to `models/nrfi_model.meta.json` after each retrain — training date ranges, game counts, AUC, Brier score per split.
+30. ✅ Discord messaging updated — model leans clearly labeled as experimental; YRFI signal retains confident framing with ROI data. Large edges (≥7%) flagged as likely model data issues. Picks sorted by signal tier (🟢→🟡→🔵→🟡→🔴→⚪) then by game time within each tier. Early-season notice explicitly states YRFI signal remains active regardless of model confidence.
 
 ## Known Gaps (not yet implemented)
 
-- No automated model retraining — must be triggered manually (`python -m backend.modeling.train_model`)
 - CORS allows all origins (`*`) — tighten when frontend domain is known
 - 2025 historical NRFI odds backfill is partial — The Odds API only has first-inning market data for April and July 2025; other months return empty. Backfill was stopped to preserve API credits. Re-run `backfill_historical_odds.py` when credits reset (see below).
 - 2025 YRFI signal sample is small (39 bets) — not enough to confirm if edge is holding. Will grow naturally through 2026 live data capture.
+- Lineup OBP features are NULL at 8:30 AM pipeline run (lineups not yet posted) — `refresh_lineups.py` fills them in from 10 AM onward. Model uses prior-season median as fallback via `SeasonStartImputer`.
