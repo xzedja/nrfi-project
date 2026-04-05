@@ -89,7 +89,17 @@ def run_daily(target_date: str | None = None) -> None:
         for g in games:
             existing = db.query(Game).filter_by(external_id=g["game_pk"]).first()
             if existing is not None:
-                if existing.game_time is None and g.get("game_time"):
+                rescheduled = False
+                new_date = date.fromisoformat(g["game_date"])
+                if existing.game_date != new_date:
+                    logger.info(
+                        "Game %d rescheduled: %s → %s (PPD makeup)",
+                        g["game_pk"], existing.game_date, new_date,
+                    )
+                    existing.game_date = new_date
+                    rescheduled = True
+                # Always update game_time on reschedule; otherwise only if NULL
+                if g.get("game_time") and (existing.game_time is None or rescheduled):
                     existing.game_time = g["game_time"]
                 skipped += 1
                 continue
