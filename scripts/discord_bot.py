@@ -728,62 +728,71 @@ def _load_pitcher_hold_records(
     return result
 
 
-def _fmt_sp_block(label: str, name: str | None, feat: Any | None, hold_records: dict[int, str]) -> str:
+def _fmt_sp_stats(prefix: str, feat: Any | None, hold_records: dict[int, str]) -> str:
     """
-    Format a single starter's stats block for Discord display.
-    label: 'Away SP' or 'Home SP'
-    hold_records: {year: 'holds/starts'} — already filtered to this pitcher
+    Format one starter's stats as an embed field value.
+    prefix: 'home_sp' or 'away_sp'
+    hold_records: {year: 'holds/starts'} for this pitcher
     """
-    if name is None:
-        return f"**{label}:** TBD"
-
-    lines = [f"**{label}: {name}**"]
+    lines = []
 
     if feat is not None:
         # Prior-season Fangraphs stats
+        era_val    = getattr(feat, f"{prefix}_era",    None)
+        fip_val    = getattr(feat, f"{prefix}_fip",    None)
+        whip_val   = getattr(feat, f"{prefix}_whip",   None)
+        k_pct_val  = getattr(feat, f"{prefix}_k_pct",  None)
+        bb_pct_val = getattr(feat, f"{prefix}_bb_pct", None)
+
         prior_parts = []
-        if getattr(feat, "home_sp_era" if label.startswith("Home") else "away_sp_era", None) is not None:
-            era_val   = getattr(feat, "home_sp_era"   if label.startswith("Home") else "away_sp_era")
-            fip_val   = getattr(feat, "home_sp_fip"   if label.startswith("Home") else "away_sp_fip")
-            whip_val  = getattr(feat, "home_sp_whip"  if label.startswith("Home") else "away_sp_whip")
-            k_pct_val = getattr(feat, "home_sp_k_pct" if label.startswith("Home") else "away_sp_k_pct")
-            bb_pct_val= getattr(feat, "home_sp_bb_pct"if label.startswith("Home") else "away_sp_bb_pct")
+        if era_val    is not None: prior_parts.append(f"ERA {era_val:.2f}")
+        if fip_val    is not None: prior_parts.append(f"FIP {fip_val:.2f}")
+        if whip_val   is not None: prior_parts.append(f"WHIP {whip_val:.2f}")
+        if k_pct_val  is not None: prior_parts.append(f"K% {k_pct_val * 100:.1f}%")
+        if bb_pct_val is not None: prior_parts.append(f"BB% {bb_pct_val * 100:.1f}%")
+        if prior_parts:
+            lines.append(f"**Prior-season:** {' · '.join(prior_parts)}")
 
-            if era_val  is not None: prior_parts.append(f"ERA {era_val:.2f}")
-            if fip_val  is not None: prior_parts.append(f"FIP {fip_val:.2f}")
-            if whip_val is not None: prior_parts.append(f"WHIP {whip_val:.2f}")
-            if k_pct_val  is not None: prior_parts.append(f"K% {k_pct_val * 100:.1f}%")
-            if bb_pct_val is not None: prior_parts.append(f"BB% {bb_pct_val * 100:.1f}%")
-            if prior_parts:
-                lines.append(f"Prior:  {' · '.join(prior_parts)}")
+        # Last-5-starts rolling stats
+        l5_era  = getattr(feat, f"{prefix}_last5_era",  None)
+        l5_whip = getattr(feat, f"{prefix}_last5_whip", None)
+        rest    = getattr(feat, f"{prefix}_days_rest",  None)
 
-        # Within-season rolling stats
         roll_parts = []
-        prefix = "home_sp" if label.startswith("Home") else "away_sp"
-        l5_era  = getattr(feat, f"{prefix}_last5_era",     None)
-        l5_whip = getattr(feat, f"{prefix}_last5_whip",    None)
-        fi_era  = getattr(feat, f"{prefix}_first_inn_era", None)
-        rest    = getattr(feat, f"{prefix}_days_rest",     None)
-        fi_k    = getattr(feat, f"{prefix}_first_inn_k_pct",   None)
-        fi_bb   = getattr(feat, f"{prefix}_first_inn_bb_pct",  None)
-
-        if l5_era  is not None: roll_parts.append(f"Last5 ERA {l5_era:.2f}")
+        if l5_era  is not None: roll_parts.append(f"ERA {l5_era:.2f}")
         if l5_whip is not None: roll_parts.append(f"WHIP {l5_whip:.2f}")
-        if fi_era  is not None: roll_parts.append(f"1st ERA {fi_era:.2f}")
-        if rest    is not None: roll_parts.append(f"Rest {int(rest)}d")
-        if fi_k    is not None: roll_parts.append(f"1st K% {fi_k * 100:.0f}%")
-        if fi_bb   is not None: roll_parts.append(f"1st BB% {fi_bb * 100:.0f}%")
+        if rest    is not None: roll_parts.append(f"{int(rest)}d rest")
         if roll_parts:
-            lines.append(f"Season: {' · '.join(roll_parts)}")
+            lines.append(f"**Last 5 starts:** {' · '.join(roll_parts)}")
 
-    # NRFI hold records
+        # 1st-inning specific (season-to-date before today)
+        fi_era  = getattr(feat, f"{prefix}_first_inn_era",      None)
+        fi_k    = getattr(feat, f"{prefix}_first_inn_k_pct",    None)
+        fi_bb   = getattr(feat, f"{prefix}_first_inn_bb_pct",   None)
+        fi_hard = getattr(feat, f"{prefix}_first_inn_hard_pct", None)
+
+        fi_parts = []
+        if fi_era  is not None: fi_parts.append(f"ERA {fi_era:.2f}")
+        if fi_k    is not None: fi_parts.append(f"K% {fi_k * 100:.0f}%")
+        if fi_bb   is not None: fi_parts.append(f"BB% {fi_bb * 100:.0f}%")
+        if fi_hard is not None: fi_parts.append(f"Hard contact {fi_hard * 100:.0f}%")
+        if fi_parts:
+            lines.append(f"**1st-inning this season:** {' · '.join(fi_parts)}")
+
+    # Hold records: fraction of starts where they held the opponent scoreless in the 1st
     if hold_records:
         rec_parts = []
         for yr in sorted(hold_records):
-            rec_parts.append(f"{str(yr)[-2:]}: {hold_records[yr]}")
-        lines.append(f"1st Inn: {' · '.join(rec_parts)}")
+            record = hold_records[yr]
+            try:
+                h, s = record.split("/")
+                pct = f"{int(h) / int(s) * 100:.0f}%"
+                rec_parts.append(f"'{str(yr)[-2:]}: {record} ({pct})")
+            except Exception:
+                rec_parts.append(f"'{str(yr)[-2:]}: {record}")
+        lines.append(f"**Scoreless 1st inns:** {' · '.join(rec_parts)}")
 
-    return "\n".join(lines)
+    return "\n".join(lines) if lines else "No stats available yet."
 
 
 def _build_pitcher_stats_embeds(target_date: str) -> list[dict[str, Any]]:
@@ -813,16 +822,16 @@ def _build_pitcher_stats_embeds(target_date: str) -> list[dict[str, Any]]:
             gp = game_gps.get(game.id)
             feat = db.query(NrfiFeatures).filter_by(game_id=game.id).first()
 
-            away_name = gp.away_sp.name if gp and gp.away_sp else None
-            home_name = gp.home_sp.name if gp and gp.home_sp else None
+            away_name  = gp.away_sp.name if gp and gp.away_sp else None
+            home_name  = gp.home_sp.name if gp and gp.home_sp else None
             away_db_id = gp.away_sp_id if gp else None
             home_db_id = gp.home_sp_id if gp else None
 
             away_records = hold_records.get(away_db_id, {}) if away_db_id else {}
             home_records = hold_records.get(home_db_id, {}) if home_db_id else {}
 
-            away_block = _fmt_sp_block("Away SP", away_name, feat, away_records)
-            home_block = _fmt_sp_block("Home SP", home_name, feat, home_records)
+            away_stats = _fmt_sp_stats("away_sp", feat, away_records)
+            home_stats = _fmt_sp_stats("home_sp", feat, home_records)
 
             title = f"{game.away_team} @ {game.home_team}"
             game_time_str = _fmt_game_time(game.game_time)
@@ -831,8 +840,19 @@ def _build_pitcher_stats_embeds(target_date: str) -> list[dict[str, Any]]:
 
             embeds.append({
                 "title": title,
-                "description": f"{away_block}\n\n{home_block}",
                 "color": _COLOR_GRAY,
+                "fields": [
+                    {
+                        "name": f"✈️ {away_name or 'TBD'} (Away SP)",
+                        "value": away_stats,
+                        "inline": False,
+                    },
+                    {
+                        "name": f"🏠 {home_name or 'TBD'} (Home SP)",
+                        "value": home_stats,
+                        "inline": False,
+                    },
+                ],
             })
 
         return embeds

@@ -232,14 +232,19 @@ def _load_pitcher_nrfi_records(
 
 
 def _fmt_pitcher_record(records: dict[int, str]) -> str:
-    """Format {year: 'holds/starts'} dict into a compact string like '(25: 8/10, 26: 2/3)'."""
+    """Format {year: 'holds/starts'} as ''25: 14/22 (64%) · '26: 3/5 (60%)'."""
     if not records:
         return ""
     parts = []
     for year in sorted(records):
-        short_year = str(year)[-2:]
-        parts.append(f"{short_year}: {records[year]}")
-    return f"({', '.join(parts)})"
+        record = records[year]
+        try:
+            h, s = record.split("/")
+            pct = f"{int(h) / int(s) * 100:.0f}%"
+            parts.append(f"'{str(year)[-2:]}: {record} ({pct})")
+        except Exception:
+            parts.append(f"'{str(year)[-2:]}: {record}")
+    return " · ".join(parts)
 
 
 def _build_game_embed(pred: dict[str, Any]) -> dict:
@@ -261,9 +266,13 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     if game_time_str:
         title += f"  ·  {game_time_str}"
 
-    away_sp_str = f"{away_sp} {away_sp_record}".strip() if away_sp else None
-    home_sp_str = f"{home_sp} {home_sp_record}".strip() if home_sp else None
-    pitchers_line = f"{away_sp_str} vs {home_sp_str}\n" if away_sp_str and home_sp_str else ""
+    pitchers_line = f"{away_sp} vs {home_sp}\n" if away_sp and home_sp else ""
+    records_parts = []
+    if away_sp_record:
+        records_parts.append(f"Away: {away_sp_record}")
+    if home_sp_record:
+        records_parts.append(f"Home: {home_sp_record}")
+    records_line = f"Scoreless 1st inns — {' | '.join(records_parts)}\n" if records_parts else ""
 
     if nrfi_odds is not None or yrfi_odds is not None:
         odds_line = f"NRFI {_fmt_odds(nrfi_odds)} · YRFI {_fmt_odds(yrfi_odds)}\n"
@@ -275,11 +284,11 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
         data_line = f"Model {model * 100:.1f}% · Mkt {market * 100:.1f}% · Edge {sign}{edge * 100:.1f}%"
-        description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge, model, market, target_date)}"
+        description = f"{pitchers_line}{records_line}{odds_line}{data_line}\n{_recommendation(edge, model, market, target_date)}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"
         description = (
-            f"{pitchers_line}{odds_line}Model {nrfi_pct} · Mkt N/A\n"
+            f"{pitchers_line}{records_line}{odds_line}Model {nrfi_pct} · Mkt N/A\n"
             f"⚪ No lines yet — model gives NRFI {nrfi_pct}"
         )
     else:
