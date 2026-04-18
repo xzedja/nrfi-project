@@ -30,6 +30,8 @@ sys.path.insert(0, ".")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+from sqlalchemy import extract
+
 from backend.db.models import Game, GamePitchers, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
 from backend.modeling.predict import predict_for_game
@@ -175,6 +177,71 @@ def _fmt_game_time(game_time_utc: str | None) -> str | None:
         return None
 
 
+def _load_pitcher_nrfi_records(
+    db, pitcher_db_ids: list[int], seasons: list[int]
+) -> dict[int, dict[int, str]]:
+    """
+    Return {pitcher_db_id: {year: "holds/starts"}} for the given seasons.
+
+    For each game in the requested seasons where the pitcher was the home SP
+    or away SP, counts:
+      - Home SP holds: inning_1_away_runs == 0
+      - Away SP holds: inning_1_home_runs == 0
+    Combined into a single record regardless of home/away role.
+    """
+    if not pitcher_db_ids or not seasons:
+        return {}
+
+    result: dict[int, dict[int, str]] = {pid: {} for pid in pitcher_db_ids}
+
+    for season in seasons:
+        rows = (
+            db.query(
+                Game.inning_1_home_runs,
+                Game.inning_1_away_runs,
+                GamePitchers.home_sp_id,
+                GamePitchers.away_sp_id,
+            )
+            .join(GamePitchers, Game.id == GamePitchers.game_id)
+            .filter(
+                extract("year", Game.game_date) == season,
+                Game.inning_1_home_runs.isnot(None),
+                Game.inning_1_away_runs.isnot(None),
+            )
+            .all()
+        )
+
+        # {pitcher_db_id: [holds, starts]}
+        counts: dict[int, list[int]] = {pid: [0, 0] for pid in pitcher_db_ids}
+
+        for h_runs, a_runs, home_sp_id, away_sp_id in rows:
+            if home_sp_id in counts:
+                counts[home_sp_id][1] += 1
+                if a_runs == 0:
+                    counts[home_sp_id][0] += 1
+            if away_sp_id in counts:
+                counts[away_sp_id][1] += 1
+                if h_runs == 0:
+                    counts[away_sp_id][0] += 1
+
+        for pid, (h, s) in counts.items():
+            if s > 0:
+                result[pid][season] = f"{h}/{s}"
+
+    return result
+
+
+def _fmt_pitcher_record(records: dict[int, str]) -> str:
+    """Format {year: 'holds/starts'} dict into a compact string like '(25: 8/10, 26: 2/3)'."""
+    if not records:
+        return ""
+    parts = []
+    for year in sorted(records):
+        short_year = str(year)[-2:]
+        parts.append(f"{short_year}: {records[year]}")
+    return f"({', '.join(parts)})"
+
+
 def _build_game_embed(pred: dict[str, Any]) -> dict:
     """Build a single Discord embed dict for one game prediction."""
     away = pred["away_team"]
@@ -184,6 +251,8 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     market = pred.get("p_nrfi_market")
     away_sp = pred.get("away_sp_name")
     home_sp = pred.get("home_sp_name")
+    away_sp_record = _fmt_pitcher_record(pred.get("away_sp_nrfi_records", {}))
+    home_sp_record = _fmt_pitcher_record(pred.get("home_sp_nrfi_records", {}))
     nrfi_odds = pred.get("first_inn_under_odds")
     yrfi_odds = pred.get("first_inn_over_odds")
     game_time_str = _fmt_game_time(pred.get("game_time"))
@@ -192,7 +261,9 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     if game_time_str:
         title += f"  ·  {game_time_str}"
 
-    pitchers_line = f"{away_sp} vs {home_sp}\n" if away_sp and home_sp else ""
+    away_sp_str = f"{away_sp} {away_sp_record}".strip() if away_sp else None
+    home_sp_str = f"{home_sp} {home_sp_record}".strip() if home_sp else None
+    pitchers_line = f"{away_sp_str} vs {home_sp_str}\n" if away_sp_str and home_sp_str else ""
 
     if nrfi_odds is not None or yrfi_odds is not None:
         odds_line = f"NRFI {_fmt_odds(nrfi_odds)} · YRFI {_fmt_odds(yrfi_odds)}\n"
@@ -294,15 +365,31 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
             logger.info("No games found for %s — nothing to post.", target)
             return
 
-        # Build pitcher name lookup: game_id → {away_sp_name, home_sp_name}
-        pitcher_names: dict[int, dict[str, str | None]] = {}
+        # Build pitcher name + DB ID lookup: game_id → {away_sp_name, home_sp_name, *_db_id}
+        pitcher_names: dict[int, dict[str, str | int | None]] = {}
+        all_pitcher_db_ids: set[int] = set()
         for game in games:
             gp = db.query(GamePitchers).filter_by(game_id=game.id).first()
             if gp is not None:
+                home_db_id = gp.home_sp_id
+                away_db_id = gp.away_sp_id
                 pitcher_names[game.id] = {
                     "away_sp_name": gp.away_sp.name if gp.away_sp else None,
                     "home_sp_name": gp.home_sp.name if gp.home_sp else None,
+                    "away_sp_db_id": away_db_id,
+                    "home_sp_db_id": home_db_id,
                 }
+                if home_db_id:
+                    all_pitcher_db_ids.add(home_db_id)
+                if away_db_id:
+                    all_pitcher_db_ids.add(away_db_id)
+
+        # Load pitcher NRFI records for 2025 and current season
+        current_year = date.fromisoformat(target).year
+        record_seasons = sorted({2025, current_year})
+        pitcher_nrfi_records = _load_pitcher_nrfi_records(
+            db, list(all_pitcher_db_ids), record_seasons
+        )
 
         # Build first-inning odds lookup: game_id → {first_inn_over_odds, first_inn_under_odds}
         first_inn_odds: dict[int, dict[str, int | None]] = {}
@@ -318,9 +405,15 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
         for game in games:
             pred = predict_for_game(game.id, db)
             if pred is not None:
-                pred.update(pitcher_names.get(game.id, {}))
+                names = pitcher_names.get(game.id, {})
+                pred.update(names)
                 pred.update(first_inn_odds.get(game.id, {}))
                 pred["game_time"] = game.game_time
+                # Attach per-pitcher NRFI records for display
+                home_db_id = names.get("home_sp_db_id")
+                away_db_id = names.get("away_sp_db_id")
+                pred["home_sp_nrfi_records"] = pitcher_nrfi_records.get(home_db_id, {}) if home_db_id else {}
+                pred["away_sp_nrfi_records"] = pitcher_nrfi_records.get(away_db_id, {}) if away_db_id else {}
                 preds.append(pred)
 
         if not preds:

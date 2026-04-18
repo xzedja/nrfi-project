@@ -695,6 +695,88 @@ def _precompute_umpire_features(
 
 
 # ---------------------------------------------------------------------------
+# Pitcher prior-season first-inning hold rates (from games + game_pitchers)
+# ---------------------------------------------------------------------------
+
+def _precompute_pitcher_hold_rates(
+    db: Session, pitcher_external_ids: list[int], before_season: int
+) -> dict[int, float | None]:
+    """
+    Compute each pitcher's first-inning hold rate from all seasons strictly
+    before before_season (anti-leakage).
+
+    Hold rate = fraction of starts where the pitcher held their opponent
+    scoreless in their half of the first inning:
+      - Home SP: held opponent scoreless → inning_1_away_runs == 0
+      - Away SP: held opponent scoreless → inning_1_home_runs == 0
+
+    Regressed toward 0.5 (league avg) based on sample size.
+    Full weight after 30 starts.
+
+    Returns dict of pitcher_external_id → hold_rate (None if no prior data).
+    """
+    if not pitcher_external_ids:
+        return {}
+
+    # Map pitcher DB id → external_id for only the pitchers we care about
+    pitchers = (
+        db.query(Pitcher)
+        .filter(Pitcher.external_id.in_(pitcher_external_ids))
+        .all()
+    )
+    db_id_to_ext: dict[int, int] = {p.id: p.external_id for p in pitchers}
+
+    if not db_id_to_ext:
+        return {ext: None for ext in pitcher_external_ids}
+
+    # Query all prior-season games with results and pitcher assignments
+    prior_game_rows = (
+        db.query(Game.inning_1_home_runs, Game.inning_1_away_runs,
+                 GamePitchers.home_sp_id, GamePitchers.away_sp_id)
+        .join(GamePitchers, Game.id == GamePitchers.game_id)
+        .filter(
+            extract("year", Game.game_date) < before_season,
+            Game.inning_1_home_runs.isnot(None),
+            Game.inning_1_away_runs.isnot(None),
+        )
+        .all()
+    )
+
+    holds: dict[int, int] = {}
+    starts: dict[int, int] = {}
+
+    for h_runs, a_runs, home_sp_id, away_sp_id in prior_game_rows:
+        # Home SP held away team scoreless in top of 1st
+        if home_sp_id is not None:
+            ext = db_id_to_ext.get(home_sp_id)
+            if ext is not None:
+                starts[ext] = starts.get(ext, 0) + 1
+                if a_runs == 0:
+                    holds[ext] = holds.get(ext, 0) + 1
+
+        # Away SP held home team scoreless in bottom of 1st
+        if away_sp_id is not None:
+            ext = db_id_to_ext.get(away_sp_id)
+            if ext is not None:
+                starts[ext] = starts.get(ext, 0) + 1
+                if h_runs == 0:
+                    holds[ext] = holds.get(ext, 0) + 1
+
+    league_avg = 0.5
+    result: dict[int, float | None] = {}
+    for ext_id in pitcher_external_ids:
+        n = starts.get(ext_id, 0)
+        if n > 0:
+            raw_rate = holds.get(ext_id, 0) / n
+            weight = min(1.0, n / 30.0)
+            result[ext_id] = round(weight * raw_rate + (1.0 - weight) * league_avg, 4)
+        else:
+            result[ext_id] = None
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # First-inning park factors (computed from historical DB data)
 # ---------------------------------------------------------------------------
 
@@ -832,6 +914,9 @@ def build_features_for_season(season: int) -> None:
         # --- Umpire features ---
         ump_map = _precompute_umpire_features(db, season)
 
+        # --- Pitcher prior-season hold rates (from games table) ---
+        hold_rates = _precompute_pitcher_hold_rates(db, all_mlb_ids, season)
+
         inserted = 0
         skipped = 0
 
@@ -919,6 +1004,10 @@ def build_features_for_season(season: int) -> None:
 
                 # Umpire
                 ump_nrfi_rate_above_avg=ump_map.get(game.id),
+
+                # Pitcher prior-season hold rates
+                home_sp_hold_rate=hold_rates.get(hsp.external_id) if hsp else None,
+                away_sp_hold_rate=hold_rates.get(asp.external_id) if asp else None,
 
                 nrfi_label=game.nrfi,
                 p_nrfi_market=None,

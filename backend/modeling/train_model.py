@@ -24,6 +24,8 @@ Features used (all pre-game, no leakage):
     temperature_f, wind_speed_mph, wind_out_mph, is_dome
   Umpire:
     ump_nrfi_rate_above_avg
+  Pitcher prior-season hold rate (fraction of 1st-inning scoreless starts):
+    home_sp_hold_rate, away_sp_hold_rate
 
 Split strategy: chronological (no shuffling) — prevents future leakage.
 
@@ -122,6 +124,9 @@ FEATURE_COLS = [
     "away_sp_first_inn_hard_pct",
     # Market prior — vig-removed implied P(NRFI) from bookmaker line (NULL → imputed to median)
     "p_nrfi_market",
+    # Pitcher prior-season first-inning hold rate
+    "home_sp_hold_rate",
+    "away_sp_hold_rate",
 ]
 
 # Earliest season included — 2023+ has real NRFI odds data for p_nrfi_market feature
