@@ -76,6 +76,47 @@ _ANTI_SIGNAL_THRESHOLD = 0.03        # edges ≥3% historically inverted (35% NR
 _ROLLING_STATS_CUTOFF = (5, 1)       # (month, day)
 
 
+def _load_team_blank_rates(
+    db, team_abbrevs: list[str], season: int, before_date: str
+) -> dict[str, tuple[int, int] | None]:
+    """
+    For each team, return (blank_count, total_games) for games in the current
+    season strictly before before_date where the team scored 0 in the 1st inning.
+    Returns None for teams with no data.
+    """
+    from sqlalchemy import or_
+
+    games = (
+        db.query(Game)
+        .filter(
+            extract("year", Game.game_date) == season,
+            Game.game_date < before_date,
+            Game.inning_1_home_runs.isnot(None),
+            Game.inning_1_away_runs.isnot(None),
+            or_(Game.home_team.in_(team_abbrevs), Game.away_team.in_(team_abbrevs)),
+        )
+        .all()
+    )
+
+    blanks: dict[str, int] = {t: 0 for t in team_abbrevs}
+    totals: dict[str, int] = {t: 0 for t in team_abbrevs}
+
+    for g in games:
+        if g.home_team in blanks:
+            totals[g.home_team] += 1
+            if g.inning_1_home_runs == 0:
+                blanks[g.home_team] += 1
+        if g.away_team in blanks:
+            totals[g.away_team] += 1
+            if g.inning_1_away_runs == 0:
+                blanks[g.away_team] += 1
+
+    return {
+        t: (blanks[t], totals[t]) if totals[t] > 0 else None
+        for t in team_abbrevs
+    }
+
+
 def _is_early_season(target_date_str: str) -> bool:
     """Return True if rolling stats are not yet populated (before May 1)."""
     try:
@@ -106,7 +147,41 @@ def _edge_color(edge: float | None, market: float | None = None, target_date: st
     return _COLOR_RED
 
 
-def _recommendation(edge: float, model: float, market: float | None = None, target_date: str | None = None) -> str:
+def _hold_rate_signal(home_hold: float | None, away_hold: float | None) -> str | None:
+    """
+    Derive a lean from prior-season hold rates when rolling in-season stats are absent.
+    Returns 'nrfi', 'yrfi', or None (no clear signal).
+
+    Logic: NRFI requires BOTH halves to be scoreless, so both pitchers need strong hold rates.
+      - Both >= 0.65 → lean NRFI
+      - At least one <= 0.45 → lean YRFI
+      - Single data point: >= 0.70 → NRFI, <= 0.45 → YRFI
+    """
+    rates = [(r, label) for r, label in ((home_hold, "home"), (away_hold, "away")) if r is not None]
+    if not rates:
+        return None
+    if len(rates) == 1:
+        r = rates[0][0]
+        if r >= 0.70: return "nrfi"
+        if r <= 0.45: return "yrfi"
+        return None
+    home_r = home_hold  # both are non-None here
+    away_r = away_hold
+    if home_r >= 0.65 and away_r >= 0.65:
+        return "nrfi"
+    if home_r <= 0.45 or away_r <= 0.45:
+        return "yrfi"
+    return None
+
+
+def _recommendation(
+    edge: float,
+    model: float,
+    market: float | None = None,
+    target_date: str | None = None,
+    home_hold: float | None = None,
+    away_hold: float | None = None,
+) -> str:
     """Concise read on the model lean. Model picks are experimental; YRFI signal is market-driven."""
     edge_pct = f"{abs(edge) * 100:.0f}%"
 
@@ -121,13 +196,34 @@ def _recommendation(edge: float, model: float, market: float | None = None, targ
             f"heavy favorites go NRFI only ~48–54%. +46–54% ROI over 2,700 bets (2023–24)."
         )
 
-    # Early season: model picks are informational only — no actionable language
+    # Early season: use prior-year hold rates as signal while rolling stats are unpopulated
     if target_date and _is_early_season(target_date):
+        signal = _hold_rate_signal(home_hold, away_hold)
+        if signal == "nrfi":
+            rates_str = " · ".join(
+                f"{lbl} {r * 100:.0f}%"
+                for r, lbl in ((away_hold, "Away"), (home_hold, "Home"))
+                if r is not None
+            )
+            return (
+                f"🟡 **'25 hold rates lean NRFI** — {rates_str} scoreless 1st-inn rate in '25. "
+                f"Rolling stats resume May 1."
+            )
+        if signal == "yrfi":
+            rates_str = " · ".join(
+                f"{lbl} {r * 100:.0f}%"
+                for r, lbl in ((away_hold, "Away"), (home_hold, "Home"))
+                if r is not None
+            )
+            return (
+                f"🟡 **'25 hold rates lean YRFI** — {rates_str} scoreless 1st-inn rate in '25. "
+                f"Rolling stats resume May 1."
+            )
         sign = "+" if edge >= 0 else ""
         direction = "above" if edge >= 0 else "below"
         return (
             f"⚪ **Informational** — model is {sign}{edge * 100:.1f}% {direction} market. "
-            f"Rolling stats not yet populated; model picks resume May 1."
+            f"No clear '25 hold-rate signal; model picks resume May 1."
         )
 
     # Anti-signal: backtest shows ≥3% positive edge wins only 35–46% of the time
@@ -261,18 +357,36 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     nrfi_odds = pred.get("first_inn_under_odds")
     yrfi_odds = pred.get("first_inn_over_odds")
     game_time_str = _fmt_game_time(pred.get("game_time"))
+    home_hold = pred.get("home_sp_hold_rate")
+    away_hold = pred.get("away_sp_hold_rate")
+    away_blank = pred.get("away_team_blank_rate")  # (blanks, total) or None
+    home_blank = pred.get("home_team_blank_rate")
 
     title = f"{away} @ {home}"
     if game_time_str:
         title += f"  ·  {game_time_str}"
 
     pitchers_line = f"{away_sp} vs {home_sp}\n" if away_sp and home_sp else ""
+
     records_parts = []
     if away_sp_record:
         records_parts.append(f"Away: {away_sp_record}")
     if home_sp_record:
         records_parts.append(f"Home: {home_sp_record}")
-    records_line = f"Scoreless 1st inns — {' | '.join(records_parts)}\n" if records_parts else ""
+    records_line = f"NRFIs — {' | '.join(records_parts)}\n" if records_parts else ""
+
+    def _fmt_blank(counts: tuple[int, int] | None) -> str | None:
+        if counts is None:
+            return None
+        b, t = counts
+        return f"{b}/{t} ({b / t * 100:.0f}%)" if t > 0 else None
+
+    off_parts = []
+    away_blank_str = _fmt_blank(away_blank)
+    home_blank_str = _fmt_blank(home_blank)
+    if away_blank_str: off_parts.append(f"Away: {away_blank_str}")
+    if home_blank_str: off_parts.append(f"Home: {home_blank_str}")
+    offense_line = f"0 runs in 1st ('26) — {' | '.join(off_parts)}\n" if off_parts else ""
 
     if nrfi_odds is not None or yrfi_odds is not None:
         odds_line = f"NRFI {_fmt_odds(nrfi_odds)} · YRFI {_fmt_odds(yrfi_odds)}\n"
@@ -284,11 +398,12 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
         data_line = f"Model {model * 100:.1f}% · Mkt {market * 100:.1f}% · Edge {sign}{edge * 100:.1f}%"
-        description = f"{pitchers_line}{records_line}{odds_line}{data_line}\n{_recommendation(edge, model, market, target_date)}"
+        rec = _recommendation(edge, model, market, target_date, home_hold, away_hold)
+        description = f"{pitchers_line}{records_line}{offense_line}{odds_line}{data_line}\n{rec}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"
         description = (
-            f"{pitchers_line}{records_line}{odds_line}Model {nrfi_pct} · Mkt N/A\n"
+            f"{pitchers_line}{records_line}{offense_line}{odds_line}Model {nrfi_pct} · Mkt N/A\n"
             f"⚪ No lines yet — model gives NRFI {nrfi_pct}"
         )
     else:
@@ -410,6 +525,18 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
                     "first_inn_under_odds": odds_row.first_inn_under_odds,
                 }
 
+        # Build nrfi_features lookup for hold rates + prior-season team stats
+        features_lookup: dict[int, NrfiFeatures] = {}
+        for game in games:
+            feat = db.query(NrfiFeatures).filter_by(game_id=game.id).first()
+            if feat is not None:
+                features_lookup[game.id] = feat
+
+        # Current-season team blank rates (scored 0 in 1st inning)
+        all_teams = list({t for g in games for t in (g.home_team, g.away_team)})
+        current_year = date.fromisoformat(target).year
+        team_blank_rates = _load_team_blank_rates(db, all_teams, current_year, target)
+
         preds = []
         for game in games:
             pred = predict_for_game(game.id, db)
@@ -423,6 +550,14 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
                 away_db_id = names.get("away_sp_db_id")
                 pred["home_sp_nrfi_records"] = pitcher_nrfi_records.get(home_db_id, {}) if home_db_id else {}
                 pred["away_sp_nrfi_records"] = pitcher_nrfi_records.get(away_db_id, {}) if away_db_id else {}
+                # Attach hold rates from nrfi_features
+                feat = features_lookup.get(game.id)
+                if feat is not None:
+                    pred["home_sp_hold_rate"] = feat.home_sp_hold_rate
+                    pred["away_sp_hold_rate"] = feat.away_sp_hold_rate
+                # Current-season team blank rates (scored 0 in 1st)
+                pred["away_team_blank_rate"] = team_blank_rates.get(game.away_team)
+                pred["home_team_blank_rate"] = team_blank_rates.get(game.home_team)
                 preds.append(pred)
 
         if not preds:
