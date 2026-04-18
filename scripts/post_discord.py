@@ -68,47 +68,85 @@ _VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 
 
 _EDGE_ZERO_THRESHOLD = 0.001        # treat |edge| < 0.1% as effectively zero (early-season anchor)
 _HIGH_DISAGREEMENT_THRESHOLD = 0.07  # flag large model-market gaps as diagnostic
+_ANTI_SIGNAL_THRESHOLD = 0.03        # edges ≥3% historically inverted (35% NRFI win rate in backtest)
+
+# Before May 1, rolling within-season stats are too sparse — model picks are informational only
+_ROLLING_STATS_CUTOFF = (5, 1)       # (month, day)
 
 
-def _edge_color(edge: float | None, market: float | None = None) -> int:
+def _is_early_season(target_date_str: str) -> bool:
+    """Return True if rolling stats are not yet populated (before May 1)."""
+    try:
+        d = date.fromisoformat(target_date_str)
+        return d < date(d.year, *_ROLLING_STATS_CUTOFF)
+    except Exception:
+        return False
+
+
+def _edge_color(edge: float | None, market: float | None = None, target_date: str | None = None) -> int:
     if edge is None:
         return _COLOR_GRAY
     if abs(edge) < _EDGE_ZERO_THRESHOLD:
         return _COLOR_GRAY
+    # YRFI signal always blue regardless of model edge or season
+    if market is not None and market >= 0.60:
+        return _COLOR_BLUE
+    # Early season: all model picks are gray (informational only)
+    if target_date and _is_early_season(target_date):
+        return _COLOR_GRAY
+    # Anti-signal: 3%+ model edges are historically inverted — show yellow, not green
+    if edge >= _ANTI_SIGNAL_THRESHOLD:
+        return _COLOR_YELLOW
     if edge >= _VALUE_PLAY_THRESHOLD:
-        return _COLOR_GREEN
+        return _COLOR_YELLOW
     if edge > 0:
         return _COLOR_YELLOW
-    if market is not None and market >= 0.60:
-        return _COLOR_BLUE   # YRFI signal on heavy favorite — market-driven, not model
     return _COLOR_RED
 
 
-def _recommendation(edge: float, model: float, market: float | None = None) -> str:
+def _recommendation(edge: float, model: float, market: float | None = None, target_date: str | None = None) -> str:
     """Concise read on the model lean. Model picks are experimental; YRFI signal is market-driven."""
     edge_pct = f"{abs(edge) * 100:.0f}%"
-    # Large disagreements are more likely model error than real edge — flag them
-    diagnostic_note = (
-        "\n*(Gap this large is often a model data issue — treat as diagnostic, not a bet)*"
-        if abs(edge) >= _HIGH_DISAGREEMENT_THRESHOLD else ""
-    )
 
     if abs(edge) < _EDGE_ZERO_THRESHOLD:
-        return "⚪ **No model edge** — anchored to market (early-season, no in-season data yet)"
-    elif edge >= _VALUE_PLAY_THRESHOLD:
-        return f"🟢 **Model leans NRFI** — {edge_pct} above market{diagnostic_note}"
-    elif edge > 0:
-        return "🟡 **Model leans NRFI** — slight disagreement with market"
-    elif market is not None and market >= 0.60:
+        return "⚪ **No model edge** — anchored to market (rolling stats not yet populated)"
+
+    # YRFI signal: always active, always confident framing
+    if market is not None and market >= 0.60:
         edge_pct_mkt = f"{market * 100:.0f}%"
         return (
             f"🔵 **YRFI signal** — market prices NRFI at {edge_pct_mkt} but historically "
             f"heavy favorites go NRFI only ~48–54%. +46–54% ROI over 2,700 bets (2023–24)."
         )
-    elif edge > -_VALUE_PLAY_THRESHOLD:
+
+    # Early season: model picks are informational only — no actionable language
+    if target_date and _is_early_season(target_date):
+        sign = "+" if edge >= 0 else ""
+        direction = "above" if edge >= 0 else "below"
+        return (
+            f"⚪ **Informational** — model is {sign}{edge * 100:.1f}% {direction} market. "
+            f"Rolling stats not yet populated; model picks resume May 1."
+        )
+
+    # Anti-signal: backtest shows ≥3% positive edge wins only 35–46% of the time
+    if edge >= _ANTI_SIGNAL_THRESHOLD:
+        return (
+            f"⚠️ **Large model-market gap ({edge_pct} above market)** — "
+            f"historically these games go YRFI more often than NRFI. Not a betting signal."
+        )
+
+    if edge >= _VALUE_PLAY_THRESHOLD:
+        return "🟡 **Model leans NRFI** — slight edge over market (1–3% range, marginal ROI)"
+    if edge > 0:
+        return "🟡 **Model leans NRFI** — slight disagreement with market"
+    if edge > -_VALUE_PLAY_THRESHOLD:
         return "🟡 **Model leans YRFI** — market more confident in NRFI than model"
-    else:
-        return f"🔴 **Model leans YRFI** — {edge_pct} below market{diagnostic_note}"
+
+    diagnostic_note = (
+        "\n*(Gap this large is often a model data issue — treat as diagnostic, not a bet)*"
+        if abs(edge) >= _HIGH_DISAGREEMENT_THRESHOLD else ""
+    )
+    return f"🔴 **Model leans YRFI** — {edge_pct} below market{diagnostic_note}"
 
 
 def _fmt_odds(o: int | None) -> str:
@@ -161,10 +199,12 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     else:
         odds_line = ""
 
+    target_date = pred.get("game_date")
+
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
         data_line = f"Model {model * 100:.1f}% · Mkt {market * 100:.1f}% · Edge {sign}{edge * 100:.1f}%"
-        description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge, model, market)}"
+        description = f"{pitchers_line}{odds_line}{data_line}\n{_recommendation(edge, model, market, target_date)}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"
         description = (
@@ -177,7 +217,7 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     embed: dict[str, Any] = {
         "title": title,
         "description": description,
-        "color": _edge_color(edge, market),
+        "color": _edge_color(edge, market, target_date),
     }
 
     logo_url = _team_logo_url(home)
@@ -189,47 +229,48 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
 
 def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
     total = len(preds)
-    value_plays = sum(1 for p in preds if p.get("edge") is not None and p["edge"] >= _VALUE_PLAY_THRESHOLD)
-    leans = sum(1 for p in preds if p.get("edge") is not None and _EDGE_ZERO_THRESHOLD <= p["edge"] < _VALUE_PLAY_THRESHOLD)
-    anchored = sum(1 for p in preds if p.get("edge") is not None and abs(p["edge"]) < _EDGE_ZERO_THRESHOLD)
-    shadow_yrfi = sum(
+    early = _is_early_season(target_date)
+
+    yrfi_signals = sum(
         1 for p in preds
         if p.get("p_nrfi_market") is not None and p["p_nrfi_market"] >= 0.60
+    )
+    model_leans = sum(
+        1 for p in preds
+        if p.get("edge") is not None
+        and _EDGE_ZERO_THRESHOLD <= p["edge"] < _ANTI_SIGNAL_THRESHOLD
+        and not early
+    )
+    anti_signals = sum(
+        1 for p in preds
+        if p.get("edge") is not None and p["edge"] >= _ANTI_SIGNAL_THRESHOLD
     )
     no_lines = sum(1 for p in preds if p.get("edge") is None)
 
     parts = [f"{total} games today"]
-    if value_plays:
-        parts.append(f"{value_plays} model lean{'s' if value_plays != 1 else ''} NRFI")
-    if leans:
-        parts.append(f"{leans} slight lean{'s' if leans != 1 else ''}")
-    if anchored:
-        parts.append(f"{anchored} anchored to market")
-    if shadow_yrfi:
-        parts.append(f"🔵 {shadow_yrfi} YRFI signal{'s' if shadow_yrfi != 1 else ''}")
+    if yrfi_signals:
+        parts.append(f"🔵 {yrfi_signals} YRFI signal{'s' if yrfi_signals != 1 else ''}")
+    if model_leans:
+        parts.append(f"{model_leans} model lean{'s' if model_leans != 1 else ''} (1–3%)")
+    if anti_signals and not early:
+        parts.append(f"{anti_signals} diagnostic gap{'s' if anti_signals != 1 else ''}")
     if no_lines:
         parts.append(f"{no_lines} no lines yet")
 
     description = "  ·  ".join(parts)
 
-    # Early-season disclaimer — model lacks current-season rolling stats until ~April 15
-    try:
-        d = date.fromisoformat(target_date)
-        if d.month < 4 or (d.month == 4 and d.day < 15):
-            description += (
-                "\n\n⚠️ **Early-season model:** Driven primarily by 2025 prior-season stats. "
-                "Model leans are experimental — no positive edge on model picks vs NRFI lines "
-                "has been confirmed yet. 🔵 YRFI signals are market-based (+46–54% ROI historically) "
-                "and remain active regardless of model confidence."
-            )
-    except Exception:
-        pass
+    if early:
+        description += (
+            "\n\n⚠️ **Early-season (model picks muted until May 1):** Rolling within-season "
+            "pitcher stats are not yet populated. Model picks shown as informational only. "
+            "🔵 YRFI signals are market-based (+46–54% ROI historically) and remain active."
+        )
 
     return {
         "title": f"NRFI Picks — {target_date}",
         "description": description,
         "color": _COLOR_BLUE,
-        "footer": {"text": "Model% = predicted NRFI probability. Mkt% = sportsbook implied probability. Edge = model vs market gap. Model leans are experimental; 🔵 YRFI signals are market-driven."},
+        "footer": {"text": "Model% = predicted NRFI probability. Mkt% = sportsbook implied probability. Edge = model vs market gap. 🔵 YRFI signals are market-driven (+46–54% ROI historically). Model leans active after May 1."},
     }
 
 
@@ -292,17 +333,20 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
         def _tier(p: dict) -> int:
             edge = p.get("edge")
             market = p.get("p_nrfi_market")
+            # YRFI signal always first — confirmed edge
+            if market is not None and market >= 0.60:
+                return 0
             if edge is None or abs(edge) < _EDGE_ZERO_THRESHOLD:
                 return 5  # no lines / anchored
-            if edge >= _VALUE_PLAY_THRESHOLD:
-                return 0  # green — model leans NRFI
-            if edge > 0:
-                return 1  # yellow — slight NRFI lean
-            if market is not None and market >= 0.60:
-                return 2  # blue — YRFI signal
+            if _VALUE_PLAY_THRESHOLD <= edge < _ANTI_SIGNAL_THRESHOLD:
+                return 1  # model lean NRFI 1–3% (marginal positive ROI)
+            if edge > 0 and edge < _VALUE_PLAY_THRESHOLD:
+                return 2  # slight NRFI lean <1%
+            if edge >= _ANTI_SIGNAL_THRESHOLD:
+                return 4  # anti-signal — diagnostic, not actionable
             if edge > -_VALUE_PLAY_THRESHOLD:
-                return 3  # yellow — slight YRFI lean
-            return 4      # red — model leans YRFI
+                return 3  # slight YRFI lean
+            return 4      # red — model leans YRFI / anti-signal
 
         preds.sort(key=lambda p: (_tier(p), p.get("game_time") or "9999"))
 
