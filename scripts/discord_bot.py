@@ -12,7 +12,8 @@ Commands:
   /yrfi-signals    — ephemeral embed showing today's YRFI signal games (market 60%+ NRFI)
   /season-record   — ephemeral embed showing season W/L for model picks + YRFI signal
   /refresh-odds    — triggers odds refresh pipeline for today (ephemeral)
-  /yesterday-picks — ephemeral embed showing yesterday's results
+  /yesterday-picks  — ephemeral embed showing yesterday's results
+  /pitcher-stats    — ephemeral embed showing today's starters: prior-season ERA/FIP/WHIP/K%/BB%, current-season last-5 ERA/WHIP/1st-inn ERA, days rest, and 1st-inn hold record
 
 Usage:
     DATABASE_URL=... DISCORD_BOT_TOKEN=... python scripts/discord_bot.py
@@ -680,6 +681,166 @@ def _build_yesterday_embed() -> dict[str, Any]:
         db.close()
 
 
+def _load_pitcher_hold_records(
+    db, pitcher_db_ids: list[int], seasons: list[int]
+) -> dict[int, dict[int, str]]:
+    """Return {pitcher_db_id: {year: 'holds/starts'}} for each season."""
+    if not pitcher_db_ids or not seasons:
+        return {}
+
+    from sqlalchemy import extract as _extract
+
+    result: dict[int, dict[int, str]] = {pid: {} for pid in pitcher_db_ids}
+    id_set = set(pitcher_db_ids)
+
+    for season in seasons:
+        rows = (
+            db.query(
+                Game.inning_1_home_runs,
+                Game.inning_1_away_runs,
+                GamePitchers.home_sp_id,
+                GamePitchers.away_sp_id,
+            )
+            .join(GamePitchers, Game.id == GamePitchers.game_id)
+            .filter(
+                _extract("year", Game.game_date) == season,
+                Game.inning_1_home_runs.isnot(None),
+                Game.inning_1_away_runs.isnot(None),
+            )
+            .all()
+        )
+
+        counts: dict[int, list[int]] = {pid: [0, 0] for pid in pitcher_db_ids}
+        for h_runs, a_runs, home_sp_id, away_sp_id in rows:
+            if home_sp_id in id_set and home_sp_id in counts:
+                counts[home_sp_id][1] += 1
+                if a_runs == 0:
+                    counts[home_sp_id][0] += 1
+            if away_sp_id in id_set and away_sp_id in counts:
+                counts[away_sp_id][1] += 1
+                if h_runs == 0:
+                    counts[away_sp_id][0] += 1
+
+        for pid, (h, s) in counts.items():
+            if s > 0:
+                result[pid][season] = f"{h}/{s}"
+
+    return result
+
+
+def _fmt_sp_block(label: str, name: str | None, feat: Any | None, hold_records: dict[int, str]) -> str:
+    """
+    Format a single starter's stats block for Discord display.
+    label: 'Away SP' or 'Home SP'
+    hold_records: {year: 'holds/starts'} — already filtered to this pitcher
+    """
+    if name is None:
+        return f"**{label}:** TBD"
+
+    lines = [f"**{label}: {name}**"]
+
+    if feat is not None:
+        # Prior-season Fangraphs stats
+        prior_parts = []
+        if getattr(feat, "home_sp_era" if label.startswith("Home") else "away_sp_era", None) is not None:
+            era_val   = getattr(feat, "home_sp_era"   if label.startswith("Home") else "away_sp_era")
+            fip_val   = getattr(feat, "home_sp_fip"   if label.startswith("Home") else "away_sp_fip")
+            whip_val  = getattr(feat, "home_sp_whip"  if label.startswith("Home") else "away_sp_whip")
+            k_pct_val = getattr(feat, "home_sp_k_pct" if label.startswith("Home") else "away_sp_k_pct")
+            bb_pct_val= getattr(feat, "home_sp_bb_pct"if label.startswith("Home") else "away_sp_bb_pct")
+
+            if era_val  is not None: prior_parts.append(f"ERA {era_val:.2f}")
+            if fip_val  is not None: prior_parts.append(f"FIP {fip_val:.2f}")
+            if whip_val is not None: prior_parts.append(f"WHIP {whip_val:.2f}")
+            if k_pct_val  is not None: prior_parts.append(f"K% {k_pct_val * 100:.1f}%")
+            if bb_pct_val is not None: prior_parts.append(f"BB% {bb_pct_val * 100:.1f}%")
+            if prior_parts:
+                lines.append(f"Prior:  {' · '.join(prior_parts)}")
+
+        # Within-season rolling stats
+        roll_parts = []
+        prefix = "home_sp" if label.startswith("Home") else "away_sp"
+        l5_era  = getattr(feat, f"{prefix}_last5_era",     None)
+        l5_whip = getattr(feat, f"{prefix}_last5_whip",    None)
+        fi_era  = getattr(feat, f"{prefix}_first_inn_era", None)
+        rest    = getattr(feat, f"{prefix}_days_rest",     None)
+        fi_k    = getattr(feat, f"{prefix}_first_inn_k_pct",   None)
+        fi_bb   = getattr(feat, f"{prefix}_first_inn_bb_pct",  None)
+
+        if l5_era  is not None: roll_parts.append(f"Last5 ERA {l5_era:.2f}")
+        if l5_whip is not None: roll_parts.append(f"WHIP {l5_whip:.2f}")
+        if fi_era  is not None: roll_parts.append(f"1st ERA {fi_era:.2f}")
+        if rest    is not None: roll_parts.append(f"Rest {int(rest)}d")
+        if fi_k    is not None: roll_parts.append(f"1st K% {fi_k * 100:.0f}%")
+        if fi_bb   is not None: roll_parts.append(f"1st BB% {fi_bb * 100:.0f}%")
+        if roll_parts:
+            lines.append(f"Season: {' · '.join(roll_parts)}")
+
+    # NRFI hold records
+    if hold_records:
+        rec_parts = []
+        for yr in sorted(hold_records):
+            rec_parts.append(f"{str(yr)[-2:]}: {hold_records[yr]}")
+        lines.append(f"1st Inn: {' · '.join(rec_parts)}")
+
+    return "\n".join(lines)
+
+
+def _build_pitcher_stats_embeds(target_date: str) -> list[dict[str, Any]]:
+    """One embed per game showing both starters' key stats."""
+    db = SessionLocal()
+    try:
+        games = db.query(Game).filter(Game.game_date == target_date).order_by(Game.game_time).all()
+        if not games:
+            return [{"title": f"Pitcher Stats — {target_date}", "description": "No games found.", "color": _COLOR_GRAY}]
+
+        # Collect all pitcher DB IDs for hold records
+        all_db_ids: set[int] = set()
+        game_gps: dict[int, Any] = {}
+        for game in games:
+            gp = db.query(GamePitchers).filter_by(game_id=game.id).first()
+            game_gps[game.id] = gp
+            if gp:
+                if gp.home_sp_id: all_db_ids.add(gp.home_sp_id)
+                if gp.away_sp_id: all_db_ids.add(gp.away_sp_id)
+
+        current_year = int(target_date[:4])
+        record_seasons = sorted({2025, current_year})
+        hold_records = _load_pitcher_hold_records(db, list(all_db_ids), record_seasons)
+
+        embeds = []
+        for game in games:
+            gp = game_gps.get(game.id)
+            feat = db.query(NrfiFeatures).filter_by(game_id=game.id).first()
+
+            away_name = gp.away_sp.name if gp and gp.away_sp else None
+            home_name = gp.home_sp.name if gp and gp.home_sp else None
+            away_db_id = gp.away_sp_id if gp else None
+            home_db_id = gp.home_sp_id if gp else None
+
+            away_records = hold_records.get(away_db_id, {}) if away_db_id else {}
+            home_records = hold_records.get(home_db_id, {}) if home_db_id else {}
+
+            away_block = _fmt_sp_block("Away SP", away_name, feat, away_records)
+            home_block = _fmt_sp_block("Home SP", home_name, feat, home_records)
+
+            title = f"{game.away_team} @ {game.home_team}"
+            game_time_str = _fmt_game_time(game.game_time)
+            if game_time_str:
+                title += f"  ·  {game_time_str}"
+
+            embeds.append({
+                "title": title,
+                "description": f"{away_block}\n\n{home_block}",
+                "color": _COLOR_GRAY,
+            })
+
+        return embeds
+
+    finally:
+        db.close()
+
+
 def _run_odds_refresh() -> str:
     """Run the odds refresh pipeline and return a status message."""
     try:
@@ -765,6 +926,19 @@ async def yesterday_picks(interaction: discord.Interaction) -> None:
     )
     embed = discord.Embed.from_dict(embed_data)
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="pitcher-stats", description="Show today's starting pitcher stats and 1st-inning hold records.")
+async def pitcher_stats(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    target_date = str(date.today())
+    embeds_data = await asyncio.get_event_loop().run_in_executor(
+        None, _build_pitcher_stats_embeds, target_date
+    )
+    embeds = [discord.Embed.from_dict(e) for e in embeds_data]
+    for i in range(0, len(embeds), 10):
+        chunk = embeds[i:i + 10]
+        await interaction.followup.send(embeds=chunk, ephemeral=True)
 
 
 if __name__ == "__main__":
