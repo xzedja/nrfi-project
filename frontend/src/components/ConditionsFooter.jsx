@@ -26,9 +26,9 @@ export default function ConditionsFooter({ game }) {
   if (chips.length === 0) return null
 
   return (
-    <div className="px-5 py-3 border-t border-slate-800 flex flex-wrap gap-x-5 gap-y-1 bg-slate-800/20">
+    <div className="px-5 py-3 border-t border-gray-100 dark:border-slate-800 flex flex-wrap gap-x-5 gap-y-1 bg-gray-50 dark:bg-slate-800/20">
       {chips.map((c, i) => (
-        <span key={i} className="text-xs text-slate-500 flex items-center gap-1">
+        <span key={i} className="text-xs text-gray-500 dark:text-slate-500 flex items-center gap-1">
           <span>{c.icon}</span>
           <span>{c.text}</span>
         </span>

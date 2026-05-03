@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy import extract
 from sqlalchemy.orm import Session, joinedload
 
 from backend.db.models import Game, GamePitchers, GameUmpire, NrfiFeatures, Odds
@@ -123,6 +124,8 @@ class DashboardGame(BaseModel):
     park: str | None
     home_sp: PitcherDetail
     away_sp: PitcherDetail
+    home_team_first_inn_rpg: float | None
+    away_team_first_inn_rpg: float | None
     p_nrfi_model: float | None
     p_nrfi_market: float | None
     edge: float | None
@@ -136,6 +139,26 @@ class DashboardGame(BaseModel):
     ump_name: str | None
     ump_nrfi_rate_above_avg: float | None
     bookmakers: list[BookmakerLine]
+
+
+class SignalRecord(BaseModel):
+    wins: int
+    losses: int
+    total: int
+    win_pct: float | None
+    roi_at_110: float | None
+
+
+class YearStats(BaseModel):
+    year: int
+    total_games: int
+    model_picks: SignalRecord
+    yrfi_signal: SignalRecord
+
+
+class SeasonStatsResponse(BaseModel):
+    current_year: YearStats
+    prior_year: YearStats
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -240,6 +263,8 @@ def dashboard_today(db: Session = Depends(get_db)):
             park=game.park,
             home_sp=_pitcher_detail(gp, "home", feat),
             away_sp=_pitcher_detail(gp, "away", feat),
+            home_team_first_inn_rpg=feat.home_team_first_inn_runs_per_game,
+            away_team_first_inn_rpg=feat.away_team_first_inn_runs_per_game,
             p_nrfi_model=feat.p_nrfi_model,
             p_nrfi_market=feat.p_nrfi_market,
             edge=edge,
@@ -257,3 +282,60 @@ def dashboard_today(db: Session = Depends(get_db)):
 
     result.sort(key=lambda g: (_SIGNAL_ORDER.get(g.signal, 5), g.game_time_utc or ""))
     return result
+
+
+def _signal_record(wins: int, losses: int) -> SignalRecord:
+    total = wins + losses
+    win_pct = round(wins / total, 4) if total > 0 else None
+    roi = round((wins * 100 - losses * 110) / (total * 110), 4) if total > 0 else None
+    return SignalRecord(wins=wins, losses=losses, total=total, win_pct=win_pct, roi_at_110=roi)
+
+
+def _year_stats(db: Session, year: int) -> YearStats:
+    rows = (
+        db.query(NrfiFeatures, Game)
+        .join(Game, NrfiFeatures.game_id == Game.id)
+        .filter(
+            extract("year", Game.game_date) == year,
+            NrfiFeatures.nrfi_label.isnot(None),
+            NrfiFeatures.p_nrfi_model.isnot(None),
+            NrfiFeatures.p_nrfi_market.isnot(None),
+        )
+        .all()
+    )
+
+    model_wins = model_losses = 0
+    yrfi_wins = yrfi_losses = 0
+
+    for feat, _game in rows:
+        edge = feat.p_nrfi_model - feat.p_nrfi_market
+        actual_nrfi = bool(feat.nrfi_label)
+
+        if edge > 0:
+            if actual_nrfi:
+                model_wins += 1
+            else:
+                model_losses += 1
+
+        if feat.p_nrfi_market >= _YRFI_THRESH:
+            if not actual_nrfi:
+                yrfi_wins += 1
+            else:
+                yrfi_losses += 1
+
+    return YearStats(
+        year=year,
+        total_games=len(rows),
+        model_picks=_signal_record(model_wins, model_losses),
+        yrfi_signal=_signal_record(yrfi_wins, yrfi_losses),
+    )
+
+
+@router.get("/season-stats", response_model=SeasonStatsResponse)
+def season_stats(db: Session = Depends(get_db)):
+    """Return season W-L records for model picks and YRFI signal for current and prior year."""
+    current_year = date.today().year
+    return SeasonStatsResponse(
+        current_year=_year_stats(db, current_year),
+        prior_year=_year_stats(db, current_year - 1),
+    )
