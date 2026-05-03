@@ -67,6 +67,21 @@ services:
       - model_store:/app/models
     command: ["python", "scripts/discord_bot.py"]
 
+  frontend:
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /app
+    depends_on:
+      - backend
+    environment:
+      VITE_API_TARGET: http://backend:8000
+    ports:
+      - "3000:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+
 volumes:
   postgres_data:
   model_store:
