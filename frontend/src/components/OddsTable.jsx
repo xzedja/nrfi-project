@@ -1,4 +1,4 @@
-import { fmtOdds } from '../utils/signal'
+import { fmtOdds, pct } from '../utils/signal'
 
 export default function OddsTable({ bookmakers, signal }) {
   if (!bookmakers || bookmakers.length === 0) return null
@@ -40,15 +40,33 @@ export default function OddsTable({ bookmakers, signal }) {
                       {isBest && <span className="text-yellow-500 dark:text-yellow-400 mr-1">★</span>}
                       {b.display_name}
                     </td>
-                    <td className={`px-3 py-2 text-center font-mono tabular-nums ${
-                      b.is_best_nrfi ? 'text-green-600 dark:text-green-400 font-bold' : 'text-gray-500 dark:text-slate-400'
+                    <td className={`px-3 py-2 text-center ${
+                      b.is_best_nrfi ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-slate-400'
                     }`}>
-                      {fmtOdds(b.nrfi_odds)}
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className={`font-mono tabular-nums ${b.is_best_nrfi ? 'font-bold' : ''}`}>
+                          {fmtOdds(b.nrfi_odds)}
+                        </span>
+                        {b.implied_nrfi_pct != null && (
+                          <span className="text-[10px] tabular-nums text-gray-400 dark:text-slate-500">
+                            {pct(b.implied_nrfi_pct)}
+                          </span>
+                        )}
+                      </div>
                     </td>
-                    <td className={`px-3 py-2 text-center font-mono tabular-nums ${
-                      b.is_best_yrfi ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-gray-500 dark:text-slate-400'
+                    <td className={`px-3 py-2 text-center ${
+                      b.is_best_yrfi ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-slate-400'
                     }`}>
-                      {fmtOdds(b.yrfi_odds)}
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className={`font-mono tabular-nums ${b.is_best_yrfi ? 'font-bold' : ''}`}>
+                          {fmtOdds(b.yrfi_odds)}
+                        </span>
+                        {b.implied_yrfi_pct != null && (
+                          <span className="text-[10px] tabular-nums text-gray-400 dark:text-slate-500">
+                            {pct(b.implied_yrfi_pct)}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-center text-gray-400 dark:text-slate-500 tabular-nums">
                       {b.total ?? '—'}

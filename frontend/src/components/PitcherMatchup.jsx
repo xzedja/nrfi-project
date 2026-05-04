@@ -11,6 +11,22 @@ function StatRow({ label, value }) {
   )
 }
 
+function NrfiStatRow({ record }) {
+  if (!record) return null
+  const rate = record.nrfi_rate != null ? pct(record.nrfi_rate) : '—'
+  return (
+    <div className="flex justify-between items-baseline gap-2">
+      <span className="text-xs text-gray-500 dark:text-slate-500 shrink-0">{record.year} NRFI</span>
+      <span className="text-xs font-semibold tabular-nums text-gray-700 dark:text-slate-300">
+        {rate}
+        <span className="font-normal text-gray-400 dark:text-slate-500 ml-1">
+          ({record.nrfi_wins}/{record.total})
+        </span>
+      </span>
+    </div>
+  )
+}
+
 function PitcherPanel({ pitcher, role }) {
   const hand = pitcher?.throws ? ` (${pitcher.throws})` : ''
   const name = pitcher?.name ?? 'TBD'
@@ -25,6 +41,12 @@ function PitcherPanel({ pitcher, role }) {
         </p>
       </div>
       <div className="space-y-1.5">
+        {(pitcher?.nrfi_current || pitcher?.nrfi_prior) && (
+          <div className="pb-1 mb-0.5 border-b border-gray-200 dark:border-slate-700/60 space-y-1.5">
+            <NrfiStatRow record={pitcher?.nrfi_current} />
+            <NrfiStatRow record={pitcher?.nrfi_prior} />
+          </div>
+        )}
         <StatRow label="L5 ERA"      value={fmtEra(pitcher?.last5_era)} />
         <StatRow label="1st Inn ERA" value={fmtEra(pitcher?.first_inn_era)} />
         <StatRow label="Hold Rate"   value={pct(pitcher?.hold_rate)} />

@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import extract
+from sqlalchemy import extract, or_
 from sqlalchemy.orm import Session, joinedload
 
 from backend.db.models import Game, GamePitchers, GameUmpire, NrfiFeatures, Odds
@@ -85,6 +85,17 @@ def _signal(p_market: float | None, edge: float | None) -> str:
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
+class NrfiRecord(BaseModel):
+    year: int
+    nrfi_wins: int
+    total: int
+    nrfi_rate: float | None
+
+
+# Alias used in DashboardGame fields (keeps API field names clear)
+TeamNrfiRecord = NrfiRecord
+
+
 class PitcherDetail(BaseModel):
     name: str | None
     throws: str | None
@@ -98,6 +109,8 @@ class PitcherDetail(BaseModel):
     first_inn_k_pct: float | None
     first_inn_bb_pct: float | None
     first_inn_hard_pct: float | None
+    nrfi_current: NrfiRecord | None
+    nrfi_prior: NrfiRecord | None
 
 
 class BookmakerLine(BaseModel):
@@ -110,6 +123,8 @@ class BookmakerLine(BaseModel):
     away_ml: int | None
     is_best_nrfi: bool
     is_best_yrfi: bool
+    implied_nrfi_pct: float | None
+    implied_yrfi_pct: float | None
 
 
 class DashboardGame(BaseModel):
@@ -126,6 +141,10 @@ class DashboardGame(BaseModel):
     away_sp: PitcherDetail
     home_team_first_inn_rpg: float | None
     away_team_first_inn_rpg: float | None
+    home_team_nrfi_current: TeamNrfiRecord | None
+    home_team_nrfi_prior: TeamNrfiRecord | None
+    away_team_nrfi_current: TeamNrfiRecord | None
+    away_team_nrfi_prior: TeamNrfiRecord | None
     p_nrfi_model: float | None
     p_nrfi_market: float | None
     edge: float | None
@@ -163,9 +182,103 @@ class SeasonStatsResponse(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _pitcher_detail(gp: GamePitchers | None, side: str, feat: NrfiFeatures) -> PitcherDetail:
+def _implied_pct(american_odds: int | None) -> float | None:
+    if american_odds is None:
+        return None
+    if american_odds < 0:
+        return round(-american_odds / (-american_odds + 100), 4)
+    return round(100 / (american_odds + 100), 4)
+
+
+def _batch_team_nrfi(
+    db: Session, teams: set[str], years: list[int]
+) -> dict[tuple[str, int], TeamNrfiRecord]:
+    rows = (
+        db.query(Game.home_team, Game.away_team, Game.nrfi, Game.game_date)
+        .filter(
+            extract("year", Game.game_date).in_(years),
+            Game.nrfi.isnot(None),
+            or_(Game.home_team.in_(list(teams)), Game.away_team.in_(list(teams))),
+        )
+        .all()
+    )
+    counts: dict[tuple[str, int], list[int]] = {}
+    for home, away, nrfi, game_date in rows:
+        year = game_date.year
+        for team in (home, away):
+            if team in teams:
+                key = (team, year)
+                if key not in counts:
+                    counts[key] = [0, 0]
+                counts[key][1] += 1
+                if nrfi:
+                    counts[key][0] += 1
+    return {
+        (team, year): TeamNrfiRecord(
+            year=year,
+            nrfi_wins=wins,
+            total=total,
+            nrfi_rate=round(wins / total, 4) if total > 0 else None,
+        )
+        for (team, year), (wins, total) in counts.items()
+    }
+
+
+def _batch_pitcher_nrfi(
+    db: Session, pitcher_ids: set[int], years: list[int]
+) -> dict[tuple[int, int], NrfiRecord]:
+    rows = (
+        db.query(
+            GamePitchers.home_sp_id,
+            GamePitchers.away_sp_id,
+            Game.game_date,
+            NrfiFeatures.nrfi_label,
+        )
+        .join(Game, GamePitchers.game_id == Game.id)
+        .join(NrfiFeatures, NrfiFeatures.game_id == Game.id)
+        .filter(
+            extract("year", Game.game_date).in_(years),
+            NrfiFeatures.nrfi_label.isnot(None),
+            or_(
+                GamePitchers.home_sp_id.in_(list(pitcher_ids)),
+                GamePitchers.away_sp_id.in_(list(pitcher_ids)),
+            ),
+        )
+        .all()
+    )
+    counts: dict[tuple[int, int], list[int]] = {}
+    for home_sp_id, away_sp_id, game_date, nrfi_label in rows:
+        year = game_date.year
+        for pid in (home_sp_id, away_sp_id):
+            if pid is not None and pid in pitcher_ids:
+                key = (pid, year)
+                if key not in counts:
+                    counts[key] = [0, 0]
+                counts[key][1] += 1
+                if nrfi_label:
+                    counts[key][0] += 1
+    return {
+        (pid, year): NrfiRecord(
+            year=year,
+            nrfi_wins=wins,
+            total=total,
+            nrfi_rate=round(wins / total, 4) if total > 0 else None,
+        )
+        for (pid, year), (wins, total) in counts.items()
+    }
+
+
+def _pitcher_detail(
+    gp: GamePitchers | None,
+    side: str,
+    feat: NrfiFeatures,
+    pitcher_nrfi: dict[tuple[int, int], NrfiRecord],
+    current_year: int,
+    prior_year: int,
+) -> PitcherDetail:
     pitcher = (gp.home_sp if side == "home" else gp.away_sp) if gp else None
     p = f"{side}_sp_"
+    pid = pitcher.id if pitcher else None
     return PitcherDetail(
         name=pitcher.name if pitcher else None,
         throws=pitcher.throws if pitcher else None,
@@ -179,6 +292,8 @@ def _pitcher_detail(gp: GamePitchers | None, side: str, feat: NrfiFeatures) -> P
         first_inn_k_pct=getattr(feat, p + "first_inn_k_pct", None),
         first_inn_bb_pct=getattr(feat, p + "first_inn_bb_pct", None),
         first_inn_hard_pct=getattr(feat, p + "first_inn_hard_pct", None),
+        nrfi_current=pitcher_nrfi.get((pid, current_year)) if pid is not None else None,
+        nrfi_prior=pitcher_nrfi.get((pid, prior_year)) if pid is not None else None,
     )
 
 
@@ -208,6 +323,20 @@ def dashboard_today(db: Session = Depends(get_db)):
         ).all()
     }
 
+    current_year = today.year
+    prior_year = current_year - 1
+    teams = {g.home_team for g in games} | {g.away_team for g in games}
+    nrfi_records = _batch_team_nrfi(db, teams, [prior_year, current_year])
+
+    pitcher_ids: set[int] = set()
+    for g in games:
+        if g.pitchers:
+            if g.pitchers.home_sp_id is not None:
+                pitcher_ids.add(g.pitchers.home_sp_id)
+            if g.pitchers.away_sp_id is not None:
+                pitcher_ids.add(g.pitchers.away_sp_id)
+    pitcher_nrfi = _batch_pitcher_nrfi(db, pitcher_ids, [prior_year, current_year]) if pitcher_ids else {}
+
     result: list[DashboardGame] = []
     for game in games:
         feat: NrfiFeatures | None = game.features
@@ -227,6 +356,14 @@ def dashboard_today(db: Session = Depends(get_db)):
         best_nrfi = max(nrfi_vals) if nrfi_vals else None
         best_yrfi = max(yrfi_vals) if yrfi_vals else None
 
+        edge = (
+            round(feat.p_nrfi_model - feat.p_nrfi_market, 4)
+            if feat.p_nrfi_model is not None and feat.p_nrfi_market is not None
+            else None
+        )
+        sig = _signal(feat.p_nrfi_market, edge)
+        is_yrfi_sig = sig in ("yrfi_signal", "yrfi_slight", "yrfi_lean")
+
         bookmakers = sorted(
             [
                 BookmakerLine(
@@ -239,16 +376,15 @@ def dashboard_today(db: Session = Depends(get_db)):
                     away_ml=o.away_ml,
                     is_best_nrfi=o.first_inn_under_odds is not None and o.first_inn_under_odds == best_nrfi,
                     is_best_yrfi=o.first_inn_over_odds  is not None and o.first_inn_over_odds  == best_yrfi,
+                    implied_nrfi_pct=_implied_pct(o.first_inn_under_odds),
+                    implied_yrfi_pct=_implied_pct(o.first_inn_over_odds),
                 )
                 for o in odds_rows
             ],
-            key=lambda b: (0 if b.source == "draftkings" else 1, -(b.nrfi_odds or -9999)),
-        )
-
-        edge = (
-            round(feat.p_nrfi_model - feat.p_nrfi_market, 4)
-            if feat.p_nrfi_model is not None and feat.p_nrfi_market is not None
-            else None
+            key=lambda b: (
+                0 if (is_yrfi_sig and b.is_best_yrfi) or (not is_yrfi_sig and b.is_best_nrfi) else 1,
+                -(b.nrfi_odds or -9999),
+            ),
         )
 
         result.append(DashboardGame(
@@ -261,14 +397,18 @@ def dashboard_today(db: Session = Depends(get_db)):
             home_team=game.home_team,
             away_team=game.away_team,
             park=game.park,
-            home_sp=_pitcher_detail(gp, "home", feat),
-            away_sp=_pitcher_detail(gp, "away", feat),
+            home_sp=_pitcher_detail(gp, "home", feat, pitcher_nrfi, current_year, prior_year),
+            away_sp=_pitcher_detail(gp, "away", feat, pitcher_nrfi, current_year, prior_year),
             home_team_first_inn_rpg=feat.home_team_first_inn_runs_per_game,
             away_team_first_inn_rpg=feat.away_team_first_inn_runs_per_game,
+            home_team_nrfi_current=nrfi_records.get((game.home_team, current_year)),
+            home_team_nrfi_prior=nrfi_records.get((game.home_team, prior_year)),
+            away_team_nrfi_current=nrfi_records.get((game.away_team, current_year)),
+            away_team_nrfi_prior=nrfi_records.get((game.away_team, prior_year)),
             p_nrfi_model=feat.p_nrfi_model,
             p_nrfi_market=feat.p_nrfi_market,
             edge=edge,
-            signal=_signal(feat.p_nrfi_market, edge),
+            signal=sig,
             is_high_disagreement=edge is not None and abs(edge) >= 0.07,
             temperature_f=feat.temperature_f,
             wind_speed_mph=feat.wind_speed_mph,
