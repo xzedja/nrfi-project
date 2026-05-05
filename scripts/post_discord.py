@@ -65,12 +65,12 @@ def _team_logo_url(abbrev: str) -> str | None:
 _MAX_EMBEDS_PER_REQUEST = 10
 
 # Edge threshold for a "strong" recommendation (same default as post_results.py)
-_VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 100.0
+_VALUE_PLAY_THRESHOLD = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "4")) / 100.0
 
 
 _EDGE_ZERO_THRESHOLD = 0.001        # treat |edge| < 0.1% as effectively zero (early-season anchor)
-_HIGH_DISAGREEMENT_THRESHOLD = 0.07  # flag large model-market gaps as diagnostic
-_ANTI_SIGNAL_THRESHOLD = 0.03        # edges ≥3% historically inverted (35% NRFI win rate in backtest)
+_HIGH_DISAGREEMENT_THRESHOLD = 0.07  # flag very large model-market gaps as diagnostic
+_ANTI_SIGNAL_THRESHOLD = 0.07        # edges ≥7% are likely model data issues, not bets
 
 # Before May 1, rolling within-season stats are too sparse — model picks are informational only
 _ROLLING_STATS_CUTOFF = (5, 1)       # (month, day)
@@ -226,17 +226,17 @@ def _recommendation(
             f"No clear '25 hold-rate signal; model picks resume May 1."
         )
 
-    # Anti-signal: backtest shows ≥3% positive edge wins only 35–46% of the time
+    # Very large edges (≥7%) are almost always a model data issue, not a real signal
     if edge >= _ANTI_SIGNAL_THRESHOLD:
         return (
-            f"⚠️ **Large model-market gap ({edge_pct} above market)** — "
-            f"historically these games go YRFI more often than NRFI. Not a betting signal."
+            f"⚠️ **Very large model-market gap ({edge_pct} above market)** — "
+            f"likely a data issue (missing lineup, early-season imputation). Not a bet."
         )
 
     if edge >= _VALUE_PLAY_THRESHOLD:
-        return "🟡 **Model leans NRFI** — slight edge over market (1–3% range, marginal ROI)"
+        return f"🟢 **Model leans NRFI** — {edge_pct} edge over market (meets 4% threshold)"
     if edge > 0:
-        return "🟡 **Model leans NRFI** — slight disagreement with market"
+        return "🟡 **Model leans NRFI** — slight edge, below 4% pick threshold"
     if edge > -_VALUE_PLAY_THRESHOLD:
         return "🟡 **Model leans YRFI** — market more confident in NRFI than model"
 

@@ -26,7 +26,7 @@ _ET = ZoneInfo("America/New_York")
 _CT = ZoneInfo("America/Chicago")
 _PT = ZoneInfo("America/Los_Angeles")
 
-_VALUE_THRESH = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "2")) / 100
+_VALUE_THRESH = float(os.environ.get("VALUE_PLAY_THRESHOLD_PP", "4")) / 100
 _YRFI_THRESH  = float(os.environ.get("YRFI_SIGNAL_THRESHOLD", "0.60"))
 _EDGE_ZERO    = 0.001
 

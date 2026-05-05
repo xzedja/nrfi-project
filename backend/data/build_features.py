@@ -272,10 +272,14 @@ def _precompute_team_stats(
 ) -> dict[tuple[str, date], dict[str, float | None]]:
     """
     For every (team, game_date) pair in the season, compute the team's
-    rolling first-inning run rates using only games played BEFORE that date.
+    rolling first-inning run rates and NRFI rate using only games played
+    BEFORE that date.
 
     If fewer than min_games have been played in the current season, falls back
     to the prior season's full-season average to avoid noisy early-season values.
+
+    Also computes nrfi_rate_l30: fraction of the last 30 games (cross-season)
+    that resulted in NRFI, for each team.
     """
     # --- Prior season averages (fallback for early-season games) ---
     prior_season_games = (
@@ -310,6 +314,24 @@ def _precompute_team_stats(
             ),
         }
 
+    # --- Cross-season NRFI history (prior season + current season) ---
+    # Used for rolling 30-game NRFI rate; spans both seasons to have enough
+    # data at the start of the current season.
+    cross_season_games = (
+        db.query(Game)
+        .filter(
+            extract("year", Game.game_date).in_([season - 1, season]),
+            Game.nrfi.isnot(None),
+        )
+        .order_by(Game.game_date)
+        .all()
+    )
+
+    team_nrfi_history: dict[str, list[tuple[date, bool]]] = {}
+    for g in cross_season_games:
+        for team in (g.home_team, g.away_team):
+            team_nrfi_history.setdefault(team, []).append((g.game_date, bool(g.nrfi)))
+
     # --- Current season rolling stats ---
     games = (
         db.query(Game)
@@ -340,15 +362,14 @@ def _precompute_team_stats(
             ]
 
             if len(prior) < min_games:
-                # Too few games — use prior season average to avoid noisy values
-                result[key] = prior_season_avg.get(team, {
+                stats = prior_season_avg.get(team, {
                     "first_inn_runs_scored_per_game": None,
                     "first_inn_runs_allowed_per_game": None,
                 })
             else:
                 scored_vals  = [sc for sc, _ in prior if sc is not None]
                 allowed_vals = [al for _, al in prior if al is not None]
-                result[key] = {
+                stats = {
                     "first_inn_runs_scored_per_game": (
                         sum(scored_vals) / len(scored_vals) if scored_vals else None
                     ),
@@ -356,6 +377,19 @@ def _precompute_team_stats(
                         sum(allowed_vals) / len(allowed_vals) if allowed_vals else None
                     ),
                 }
+
+            # Rolling 30-game NRFI rate (cross-season, min 10 games)
+            nrfi_prior = [
+                nrfi for d, nrfi in team_nrfi_history.get(team, [])
+                if d < g.game_date
+            ]
+            last_30 = nrfi_prior[-30:]
+            stats["nrfi_rate_l30"] = (
+                round(sum(last_30) / len(last_30), 4)
+                if len(last_30) >= min_games else None
+            )
+
+            result[key] = stats
 
     return result
 
@@ -994,6 +1028,8 @@ def build_features_for_season(season: int) -> None:
                 away_team_obp=at_bat.get("obp"),
                 home_team_slg=ht_bat.get("slg"),
                 away_team_slg=at_bat.get("slg"),
+                home_team_nrfi_rate_l30=ht.get("nrfi_rate_l30"),
+                away_team_nrfi_rate_l30=at.get("nrfi_rate_l30"),
 
                 # Park and weather
                 park_factor=park_factors.get(game.park, 1.0),

@@ -99,21 +99,16 @@ FEATURE_COLS = [
     "away_team_obp",
     "home_team_slg",
     "away_team_slg",
-    # Park
-    "park_factor",
-    # Weather
-    "temperature_f",
-    "wind_speed_mph",
-    "wind_out_mph",
-    "is_dome",
-    # Umpire
-    "ump_nrfi_rate_above_avg",
+    # Rolling team NRFI rate (last 30 games, cross-season)
+    # Captures team-level clustering tendencies not captured by R/G alone.
+    # Market prices this in with a lag; we compute it precisely.
+    "home_team_nrfi_rate_l30",
+    "away_team_nrfi_rate_l30",
     # Game-specific lineup strength (prior-season avg OBP of starting 9)
     "home_lineup_obp",
     "away_lineup_obp",
     # Interaction features (derived at load time)
-    "park_x_wind_out",        # park_factor × wind_out_mph  — park + wind together
-    "home_sp_era_minus_away", # home_sp_era − away_sp_era  — relative pitcher quality
+    "home_sp_era_minus_away", # home_sp_era − away_sp_era — relative pitcher quality
     "lineup_obp_diff",        # away_lineup_obp − home_lineup_obp — net offensive matchup
     # First-inning specific Statcast features (season-to-date prior starts)
     "home_sp_first_inn_k_pct",
@@ -122,15 +117,19 @@ FEATURE_COLS = [
     "away_sp_first_inn_k_pct",
     "away_sp_first_inn_bb_pct",
     "away_sp_first_inn_hard_pct",
-    # Market prior — vig-removed implied P(NRFI) from bookmaker line (NULL → imputed to median)
-    "p_nrfi_market",
     # Pitcher prior-season first-inning hold rate
     "home_sp_hold_rate",
     "away_sp_hold_rate",
+    # NOTE: park_factor, weather, ump_nrfi_rate_above_avg, and p_nrfi_market removed.
+    # The market already prices these in. Including them caused double-counting and
+    # anchored the model to the market rather than forming an independent view.
+    # Edge = p_nrfi_model - p_nrfi_market is computed at prediction time only.
 ]
 
-# Earliest season included — 2023+ has real NRFI odds data for p_nrfi_market feature
-_DATA_START_YEAR = 2023
+# Earliest season included. 2015+ gives ~50k rows vs ~7k for 2023+.
+# p_nrfi_market is NULL for pre-2023 rows and imputed to median (~0.50) by
+# SeasonStartImputer — that's correct behaviour since we no longer use it as a feature.
+_DATA_START_YEAR = 2015
 
 # Rolling validation window: most recent K days held out for model selection (LR vs XGB).
 _VAL_WINDOW_DAYS = 7
@@ -148,7 +147,7 @@ def load_feature_dataframe() -> pd.DataFrame:
     Returns a DataFrame sorted chronologically with interaction features added.
     """
     # Base DB columns (exclude derived interaction features)
-    _DERIVED = {"park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"}
+    _DERIVED = {"home_sp_era_minus_away", "lineup_obp_diff"}
     _BASE_COLS = [c for c in FEATURE_COLS if c not in _DERIVED]
 
     db = SessionLocal()
@@ -176,7 +175,6 @@ def load_feature_dataframe() -> pd.DataFrame:
     df = pd.DataFrame(records)
 
     # Derived interaction features (NaN-safe — NaN propagates when either input is NaN)
-    df["park_x_wind_out"]        = df["park_factor"] * df["wind_out_mph"]
     df["home_sp_era_minus_away"] = df["home_sp_era"] - df["away_sp_era"]
     df["lineup_obp_diff"]        = df["away_lineup_obp"] - df["home_lineup_obp"]
 

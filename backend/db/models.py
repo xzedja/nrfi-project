@@ -184,6 +184,10 @@ class NrfiFeatures(Base):
     home_lineup_obp = Column(Float, nullable=True)  # home batting order avg OBP
     away_lineup_obp = Column(Float, nullable=True)  # away batting order avg OBP
 
+    # Rolling team NRFI rate (last 30 games, cross-season, game-level NRFI outcome)
+    home_team_nrfi_rate_l30 = Column(Float, nullable=True)
+    away_team_nrfi_rate_l30 = Column(Float, nullable=True)
+
     # First-inning specific Statcast features (season-to-date prior starts)
     home_sp_first_inn_k_pct    = Column(Float, nullable=True)  # K% in first inning only
     home_sp_first_inn_bb_pct   = Column(Float, nullable=True)  # BB% in first inning only

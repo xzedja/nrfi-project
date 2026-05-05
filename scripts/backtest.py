@@ -113,7 +113,7 @@ def run_backtest(
     # Batch predict using current model on stored features
     # Interaction features are derived the same way as train_model.py
     # -----------------------------------------------------------------------
-    _DERIVED = {"park_x_wind_out", "home_sp_era_minus_away", "lineup_obp_diff"}
+    _DERIVED = {"home_sp_era_minus_away", "lineup_obp_diff"}
     _BASE_COLS = [c for c in FEATURE_COLS if c not in _DERIVED]
 
     records = []
@@ -124,7 +124,6 @@ def run_backtest(
         records.append(rec)
 
     feat_df = pd.DataFrame(records)
-    feat_df["park_x_wind_out"]        = feat_df["park_factor"] * feat_df["wind_out_mph"]
     feat_df["home_sp_era_minus_away"] = feat_df["home_sp_era"] - feat_df["away_sp_era"]
     feat_df["lineup_obp_diff"]        = feat_df["away_lineup_obp"] - feat_df["home_lineup_obp"]
 
