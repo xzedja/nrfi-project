@@ -180,6 +180,11 @@ class NrfiFeatures(Base):
     home_sp_hold_rate = Column(Float, nullable=True)
     away_sp_hold_rate = Column(Float, nullable=True)
 
+    # Pitcher in-season NRFI rate — fraction of current-season starts (before this game) where
+    # the pitcher held the opponent scoreless in their half of the 1st inning. NULL if < 3 starts.
+    home_sp_nrfi_rate_season = Column(Float, nullable=True)
+    away_sp_nrfi_rate_season = Column(Float, nullable=True)
+
     # Game-specific lineup strength (average OBP of starting lineup, prior-season stats)
     home_lineup_obp = Column(Float, nullable=True)  # home batting order avg OBP
     away_lineup_obp = Column(Float, nullable=True)  # away batting order avg OBP

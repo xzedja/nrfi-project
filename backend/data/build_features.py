@@ -503,7 +503,7 @@ def _pitcher_rolling_features(
     """
     _null = {k: None for k in (
         "last5_era", "last5_whip", "first_inn_era", "avg_velo", "velo_trend", "days_rest",
-        "first_inn_k_pct", "first_inn_bb_pct", "first_inn_hard_pct",
+        "first_inn_k_pct", "first_inn_bb_pct", "first_inn_hard_pct", "nrfi_rate_season",
     )}
 
     if starts_df is None or starts_df.empty:
@@ -562,6 +562,15 @@ def _pitcher_rolling_features(
         if total_bip > 0:
             first_inn_hard_pct = round(float(prior["first_inn_hard"].sum()) / total_bip, 4)
 
+    # In-season NRFI hold rate: fraction of prior starts where pitcher held opponent
+    # scoreless in their half of the 1st inning (first_inn_runs == 0).
+    # Min 3 starts; NULL otherwise → SeasonStartImputer proxies to home_sp_hold_rate.
+    _MIN_NRFI_STARTS = 3
+    nrfi_rate_season: float | None = None
+    if len(prior) >= _MIN_NRFI_STARTS:
+        nrfi_count = int((prior["first_inn_runs"] == 0).sum())
+        nrfi_rate_season = round(nrfi_count / len(prior), 4)
+
     return {
         "last5_era":          last5_era,
         "last5_whip":         last5_whip,
@@ -572,6 +581,7 @@ def _pitcher_rolling_features(
         "first_inn_k_pct":    first_inn_k_pct,
         "first_inn_bb_pct":   first_inn_bb_pct,
         "first_inn_hard_pct": first_inn_hard_pct,
+        "nrfi_rate_season":   nrfi_rate_season,
     }
 
 
@@ -1044,6 +1054,10 @@ def build_features_for_season(season: int) -> None:
                 # Pitcher prior-season hold rates
                 home_sp_hold_rate=hold_rates.get(hsp.external_id) if hsp else None,
                 away_sp_hold_rate=hold_rates.get(asp.external_id) if asp else None,
+
+                # Pitcher in-season NRFI hold rate (current season, prior starts)
+                home_sp_nrfi_rate_season=h_roll.get("nrfi_rate_season"),
+                away_sp_nrfi_rate_season=a_roll.get("nrfi_rate_season"),
 
                 nrfi_label=game.nrfi,
                 p_nrfi_market=None,

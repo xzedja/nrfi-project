@@ -120,6 +120,11 @@ FEATURE_COLS = [
     # Pitcher prior-season first-inning hold rate
     "home_sp_hold_rate",
     "away_sp_hold_rate",
+    # Pitcher in-season NRFI hold rate (current season, prior starts, min 3)
+    # Captures current-season tendency to hold opponents scoreless in the 1st.
+    # NULL at season start → SeasonStartImputer proxies to home_sp_hold_rate.
+    "home_sp_nrfi_rate_season",
+    "away_sp_nrfi_rate_season",
     # NOTE: park_factor, weather, ump_nrfi_rate_above_avg, and p_nrfi_market removed.
     # The market already prices these in. Including them caused double-counting and
     # anchored the model to the market rather than forming an independent view.

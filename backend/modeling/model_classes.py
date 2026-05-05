@@ -50,6 +50,9 @@ class SeasonStartImputer(BaseEstimator, TransformerMixin):
         ("home_sp_first_inn_bb_pct",   "home_sp_bb_pct"),
         ("away_sp_first_inn_k_pct",    "away_sp_k_pct"),
         ("away_sp_first_inn_bb_pct",   "away_sp_bb_pct"),
+        # In-season NRFI rate fallback: use prior-season hold rate until 3 starts are available
+        ("home_sp_nrfi_rate_season",   "home_sp_hold_rate"),
+        ("away_sp_nrfi_rate_season",   "away_sp_hold_rate"),
     ]
     # Velocity trend: no starts yet → neutral (0 = no change)
     ZERO_COLS = ["home_sp_velo_trend", "away_sp_velo_trend"]

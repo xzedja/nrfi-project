@@ -206,14 +206,14 @@ When running backfills manually, order matters due to dependencies:
 
 ## Modeling Rules
 
-### Current feature set (30 features in `FEATURE_COLS`)
-See `backend/modeling/train_model.py` for the full list. All features including weather, umpire, and pitcher rest are active in `FEATURE_COLS`.
+### Current feature set (~22 active features in `FEATURE_COLS`)
+See `backend/modeling/train_model.py` for the full list. Weather, umpire, park factor, and `p_nrfi_market` have been **removed** from `FEATURE_COLS` — model trains only on pre-game, non-market-known features. Edge is computed at prediction time only (`p_nrfi_model - p_nrfi_market`). The file defines 44 total features but 22 show 0.000 importance (see Known Gaps in CLAUDE.md).
 
 ### `train_model.py`
 - Trains **both** logistic regression (LR) and XGBoost (XGB), prints side-by-side metrics.
 - Saves whichever model wins on **validation AUC**, Platt-calibrated on the calib set.
 - **Dynamic expanding window split** (no hardcoded years):
-  - `_DATA_START_YEAR = 2023` — earliest season included in training data
+  - `_DATA_START_YEAR = 2015` — earliest season included in training data (expanded from 2023; 25,564 game rows)
   - `_CALIB_WINDOW_DAYS = 365` — Platt calibration set spans the last full year (always reaches into prior season regardless of calendar position; 365 days avoids the offseason gap problem of smaller windows)
   - `_VAL_WINDOW_DAYS = 7` — model selection set is the last 7 days of completed games
   - **Fit set**: all games from `_DATA_START_YEAR` through `calib_cutoff`
@@ -227,8 +227,8 @@ See `backend/modeling/train_model.py` for the full list. All features including 
 - Winner is Platt-calibrated using a logistic regression fit on calib set raw scores → saved as `CalibratedModel`.
 - Evaluates AUC, log loss, Brier score on all splits; empty splits (e.g. empty test set) are skipped safely.
 - Saves training metadata to `models/nrfi_model.meta.json`: training date ranges, game counts, AUC, Brier per split.
-- **Current trained model: Logistic Regression** (val AUC ~0.55). LR generalises consistently; XGB overfits (high train AUC, low test AUC).
-- Retrain manually: `python -m backend.modeling.train_model` inside the Docker container.
+- **Current trained model: XGBoost** (val AUC 0.5698 vs LR 0.5593). With 2015+ data XGB now generalises well; LR was preferred on the smaller 2023+ dataset.
+- Retrain manually: `docker exec -it nrfi-backend-1 python -m backend.modeling.train_model` (container name is `nrfi-backend-1`, NOT `nrfi-project-backend-1`).
 - Retrain automatically: every Sunday at 8:00 AM via cron (before daily pipeline at 8:30 AM).
 - **Delta model (XGBRegressor on residual y' = nrfi_label - p_nrfi_market) was tried and reverted.** It produced uniform YRFI bias at season start because without Statcast data all features impute to median, outputting a constant ~-10% delta for every game. Do not reintroduce until rolling pitcher features are populated (typically 5–6 weeks into season).
 - **Platt calibration pitfall**: do NOT shrink `_CALIB_WINDOW_DAYS` below ~180. Smaller windows during the offseason span Dec–Feb (near-zero MLB games), giving the Platt scaler only 30–70 games to fit on — output collapses to a single probability with no spread.
