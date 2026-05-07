@@ -1,5 +1,45 @@
 import { getSignal, fmtEdge, pct, fmtOdds, fmtEra } from '../utils/signal'
 
+const _NRFI_SIGNALS = new Set(['nrfi_strong', 'nrfi_lean'])
+const _YRFI_SIGNALS = new Set(['yrfi_signal', 'yrfi_slight', 'yrfi_lean'])
+
+function ResultCell({ game }) {
+  const hasResult = game.nrfi_result !== null && game.nrfi_result !== undefined
+  const gameStarted = game.game_time_utc
+    ? new Date(game.game_time_utc) < new Date()
+    : false
+
+  if (hasResult) {
+    const score = `${game.inning_1_away_runs ?? 0}–${game.inning_1_home_runs ?? 0}`
+    let outcome = null
+    if (_NRFI_SIGNALS.has(game.signal)) outcome = game.nrfi_result ? 'WIN' : 'MISS'
+    else if (_YRFI_SIGNALS.has(game.signal)) outcome = !game.nrfi_result ? 'WIN' : 'MISS'
+    return (
+      <div className="flex flex-col items-center gap-0.5">
+        {outcome && (
+          <span className={`text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded ${
+            outcome === 'WIN'
+              ? 'bg-emerald-500/[0.12] text-emerald-400'
+              : 'bg-red-500/[0.12] text-red-400'
+          }`}>{outcome}</span>
+        )}
+        <span className="text-[11px] font-mono text-slate-400 tabular-nums">{score}</span>
+      </div>
+    )
+  }
+
+  if (gameStarted) {
+    return (
+      <span className="flex items-center justify-center gap-1 text-[11px] font-mono text-violet-400/60">
+        <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse" />
+        Live
+      </span>
+    )
+  }
+
+  return <span className="text-slate-600">—</span>
+}
+
 function lastName(name) {
   if (!name) return 'TBD'
   const parts = name.trim().split(' ')
@@ -37,6 +77,7 @@ export default function GamesTable({ games, onSelect }) {
               <th className="px-4 py-3 text-center hidden sm:table-cell">Pitchers</th>
               <th className="px-4 py-3 text-center">Model / Mkt</th>
               <th className="px-4 py-3 text-center">Edge</th>
+              <th className="px-4 py-3 text-center hidden sm:table-cell">Result</th>
               <th className="px-4 py-3 text-center hidden md:table-cell">Best Lines</th>
               <th className="w-6" />
             </tr>
@@ -104,6 +145,11 @@ export default function GamesTable({ games, onSelect }) {
                   {/* Edge */}
                   <td className="px-4 py-3 text-center">
                     <EdgeCell edge={game.edge} signal={game.signal} />
+                  </td>
+
+                  {/* Result */}
+                  <td className="px-4 py-3 text-center hidden sm:table-cell">
+                    <ResultCell game={game} />
                   </td>
 
                   {/* Best Lines */}

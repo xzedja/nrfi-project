@@ -14,12 +14,51 @@ function TeamStat({ label, away, home }) {
   )
 }
 
-export default function GameCard({ game }) {
-  const sig = getSignal(game.signal)
+const _NRFI_SIGNALS = new Set(['nrfi_strong', 'nrfi_lean'])
+const _YRFI_SIGNALS = new Set(['yrfi_signal', 'yrfi_slight', 'yrfi_lean'])
+
+function ResultStrip({ game }) {
+  const hasResult = game.nrfi_result !== null && game.nrfi_result !== undefined
+  const gameStarted = game.game_time_utc
+    ? new Date(game.game_time_utc) < new Date()
+    : false
+
+  if (hasResult) {
+    const score = `${game.inning_1_away_runs ?? 0}–${game.inning_1_home_runs ?? 0}`
+    let outcome = null
+    if (_NRFI_SIGNALS.has(game.signal)) outcome = game.nrfi_result ? 'WIN' : 'MISS'
+    else if (_YRFI_SIGNALS.has(game.signal)) outcome = !game.nrfi_result ? 'WIN' : 'MISS'
+    return (
+      <div className="flex items-center gap-2 shrink-0">
+        {outcome && (
+          <span className={`text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-md ${
+            outcome === 'WIN'
+              ? 'bg-emerald-500/[0.12] text-emerald-400 ring-1 ring-emerald-500/25'
+              : 'bg-red-500/[0.12] text-red-400 ring-1 ring-red-500/25'
+          }`}>{outcome}</span>
+        )}
+        <span className="text-[11px] font-mono text-slate-400 tabular-nums">{score}</span>
+      </div>
+    )
+  }
+
+  if (gameStarted) {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-mono text-violet-400/70 shrink-0">
+        <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse" />
+        LIVE
+      </span>
+    )
+  }
 
   const timeStr = game.game_time_et
     ? `${game.game_time_et} · ${game.game_time_ct} · ${game.game_time_pt}`
     : 'Time TBD'
+  return <span className="text-[11px] font-mono text-slate-500 tabular-nums shrink-0">{timeStr}</span>
+}
+
+export default function GameCard({ game }) {
+  const sig = getSignal(game.signal)
 
   const fmtRate = (rec) => {
     if (!rec) return null
@@ -35,12 +74,12 @@ export default function GameCard({ game }) {
       shadow-sm dark:shadow-[0_4px_32px_rgba(109,40,217,0.08)]
     `}>
 
-      {/* ── Top strip: badge + time ── */}
+      {/* ── Top strip: badge + result/time ── */}
       <div className="px-4 pt-3.5 pb-3 flex items-center justify-between gap-3">
         <span className={`text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-md ${sig.badge}`}>
           {sig.label}
         </span>
-        <span className="text-[11px] font-mono text-slate-500 tabular-nums shrink-0">{timeStr}</span>
+        <ResultStrip game={game} />
       </div>
 
       {/* ── Team matchup ── */}
