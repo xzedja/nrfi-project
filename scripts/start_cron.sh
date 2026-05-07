@@ -25,6 +25,7 @@ printenv | grep -v "^_=" > /etc/environment
   echo "0 12 * * * . /etc/environment; cd /app && python scripts/refresh_odds.py >> /app/logs/odds_refresh.log 2>&1"
   echo "0 16 * * * . /etc/environment; cd /app && python scripts/refresh_odds.py >> /app/logs/odds_refresh.log 2>&1"
   echo "0 2 * * * . /etc/environment; cd /app && python scripts/backfill_game_results.py >> /app/logs/results.log 2>&1"
+  echo "*/30 * * * * . /etc/environment; cd /app && python scripts/refresh_results.py >> /app/logs/refresh_results.log 2>&1"
 ) | crontab -
 
 echo "Crontab installed:"

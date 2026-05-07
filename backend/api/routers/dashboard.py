@@ -160,6 +160,9 @@ class DashboardGame(BaseModel):
     ump_name: str | None
     ump_nrfi_rate_above_avg: float | None
     bookmakers: list[BookmakerLine]
+    inning_1_away_runs: int | None = None
+    inning_1_home_runs: int | None = None
+    nrfi_result: bool | None = None
 
 
 class SignalRecord(BaseModel):
@@ -420,6 +423,9 @@ def dashboard_today(db: Session = Depends(get_db)):
             ump_name=ump.ump_name if ump else None,
             ump_nrfi_rate_above_avg=feat.ump_nrfi_rate_above_avg,
             bookmakers=bookmakers,
+            inning_1_away_runs=game.inning_1_away_runs,
+            inning_1_home_runs=game.inning_1_home_runs,
+            nrfi_result=game.nrfi,
         ))
 
     result.sort(key=lambda g: (_SIGNAL_ORDER.get(g.signal, 5), g.game_time_utc or ""))
