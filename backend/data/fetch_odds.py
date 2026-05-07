@@ -39,7 +39,8 @@ _REQUEST_TIMEOUT = 10
 
 # Preference order for first-inning odds bookmaker selection
 _FIRST_INN_BOOKMAKER_PREFERENCE = [
-    "draftkings", "fanduel", "caesars", "betmgm", "betonline", "bovada",
+    "draftkings", "fanduel", "caesars", "betmgm",
+    "betonlineag", "bovada", "mybookieag", "bookiepro", "lowvig", "pinnacle",
 ]
 
 # Map The Odds API full team names → Statcast abbreviations used in our DB
@@ -125,7 +126,7 @@ def _fetch_raw_odds(date_str: str) -> list[dict[str, Any]]:
     settings = get_settings()
     params = {
         "apiKey": settings.odds_api_key,
-        "regions": "us",
+        "regions": "us,us2",
         "markets": "h2h,totals",
         "dateFormat": "iso",
         "oddsFormat": "american",
@@ -183,7 +184,7 @@ def _fetch_first_inn_odds_all(event_id: str) -> dict[str, dict[str, int | None]]
             f"{_EVENTS_API_BASE}{event_id}/odds",
             params={
                 "apiKey": settings.odds_api_key,
-                "regions": "us",
+                "regions": "us,us2",
                 "markets": "totals_1st_1_innings",
                 "oddsFormat": "american",
             },

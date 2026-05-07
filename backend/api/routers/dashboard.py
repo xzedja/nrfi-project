@@ -52,6 +52,8 @@ _BOOK_NAMES: dict[str, str] = {
     "barstool":       "Barstool",
     "unibet":         "Unibet",
     "betonlineag":    "BetOnline",
+    "mybookieag":     "MyBookie",
+    "bookiepro":      "BookiePro",
     "lowvig":         "LowVig",
     "pinnacle":       "Pinnacle",
 }
