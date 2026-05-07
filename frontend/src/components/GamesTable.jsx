@@ -27,11 +27,11 @@ function EdgeCell({ edge, signal }) {
 
 export default function GamesTable({ games, onSelect }) {
   return (
-    <div className="rounded-xl overflow-hidden border border-gray-200 dark:border-white/[0.06]">
+    <div className="rounded-xl overflow-hidden border border-violet-200 dark:border-violet-500/[0.12]">
       <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[640px]">
           <thead>
-            <tr className="bg-gray-50 dark:bg-white/[0.03] border-b border-gray-200 dark:border-white/[0.06] text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
+            <tr className="bg-violet-50 dark:bg-violet-500/[0.05] border-b border-violet-100 dark:border-violet-500/[0.10] text-[10px] uppercase tracking-widest text-violet-400/60 dark:text-violet-400/40 font-semibold">
               <th className="text-left px-4 py-3">Matchup</th>
               <th className="px-4 py-3 text-center">Signal</th>
               <th className="px-4 py-3 text-center hidden sm:table-cell">Pitchers</th>
@@ -52,10 +52,10 @@ export default function GamesTable({ games, onSelect }) {
                   key={game.game_id}
                   onClick={() => onSelect(game)}
                   className={`
-                    border-t border-gray-100 dark:border-white/[0.04]
-                    hover:bg-gray-50 dark:hover:bg-white/[0.03]
+                    border-t border-violet-100 dark:border-violet-500/[0.06]
+                    hover:bg-violet-50/60 dark:hover:bg-violet-500/[0.04]
                     cursor-pointer transition-colors group
-                    ${i % 2 === 0 ? '' : 'bg-gray-50/40 dark:bg-white/[0.01]'}
+                    ${i % 2 === 0 ? '' : 'bg-violet-50/30 dark:bg-violet-500/[0.02]'}
                   `}
                 >
                   {/* Matchup */}

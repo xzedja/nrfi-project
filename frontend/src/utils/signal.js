@@ -50,14 +50,14 @@ export const SIGNAL_CONFIG = {
     dotColor:   'text-red-500',
   },
   no_edge: {
-    leftBar:    'border-l-slate-600',
-    bar:        'bg-slate-600',
-    badge:      'bg-slate-700/60 text-slate-400 ring-1 ring-slate-600/50',
+    leftBar:    'border-l-violet-900',
+    bar:        'bg-violet-800',
+    badge:      'bg-violet-500/[0.08] text-violet-400/60 ring-1 ring-violet-500/20',
     label:      'NO EDGE',
-    edgeColor:  'text-slate-400',
-    edgeBg:     'bg-slate-700/60 text-slate-400 ring-1 ring-slate-600/50',
-    gaugeColor: 'bg-slate-600',
-    dotColor:   'text-slate-500',
+    edgeColor:  'text-violet-400/60',
+    edgeBg:     'bg-violet-500/[0.08] text-violet-400/60 ring-1 ring-violet-500/20',
+    gaugeColor: 'bg-violet-700',
+    dotColor:   'text-violet-600',
   },
 }
 

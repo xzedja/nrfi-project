@@ -28,21 +28,21 @@ export default function Header({ lastUpdated, onRefresh, theme, toggleTheme, vie
     : null
 
   return (
-    <header className="sticky top-0 z-20 border-b border-white/[0.06] bg-white/90 dark:bg-[#070c17]/90 backdrop-blur-md">
+    <header className="sticky top-0 z-20 border-b border-violet-200 dark:border-violet-500/[0.15] bg-[#faf8ff]/90 dark:bg-[#090712]/90 backdrop-blur-md">
       <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
 
         {/* Brand */}
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-baseline gap-1.5">
-            <span className="font-mono font-bold text-lg tracking-tight text-gray-900 dark:text-white">NRFI</span>
-            <span className="font-mono text-xs text-slate-500 hidden sm:inline">/</span>
-            <span className="font-mono text-xs text-slate-500 hidden sm:inline">YRFI</span>
+            <span className="font-mono font-bold text-lg tracking-tight text-violet-600 dark:text-violet-400">NRFI</span>
+            <span className="font-mono text-xs text-violet-400/50 dark:text-violet-500/50 hidden sm:inline">/</span>
+            <span className="font-mono text-xs text-violet-400/50 dark:text-violet-500/50 hidden sm:inline">YRFI</span>
           </div>
-          <div className="hidden sm:flex items-center gap-1.5 pl-3 border-l border-white/[0.08]">
+          <div className="hidden sm:flex items-center gap-1.5 pl-3 border-l border-violet-200 dark:border-violet-500/[0.15]">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-xs text-slate-500">{today}</span>
+            <span className="text-xs text-violet-400/70 dark:text-violet-400/50">{today}</span>
             {timeStr && (
-              <span className="text-xs text-slate-600">· {timeStr}</span>
+              <span className="text-xs text-violet-400/40 dark:text-violet-500/40">· {timeStr}</span>
             )}
           </div>
         </div>
@@ -51,7 +51,7 @@ export default function Header({ lastUpdated, onRefresh, theme, toggleTheme, vie
         <div className="flex items-center gap-2 shrink-0">
 
           {/* View toggle */}
-          <div className="flex rounded-lg overflow-hidden border border-gray-200 dark:border-white/[0.08] bg-gray-100 dark:bg-white/[0.04]">
+          <div className="flex rounded-lg overflow-hidden border border-violet-200 dark:border-violet-500/[0.2] bg-violet-50 dark:bg-violet-500/[0.06]">
             {[
               { mode: 'tile',  Icon: GridIcon,  title: 'Card view' },
               { mode: 'table', Icon: ListIcon,  title: 'Table view' },
@@ -62,8 +62,8 @@ export default function Header({ lastUpdated, onRefresh, theme, toggleTheme, vie
                 title={title}
                 className={`p-2 transition-colors ${
                   viewMode === mode
-                    ? 'bg-gray-300 dark:bg-white/[0.12] text-gray-900 dark:text-white'
-                    : 'text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300'
+                    ? 'bg-violet-200 dark:bg-violet-500/[0.2] text-violet-700 dark:text-violet-300'
+                    : 'text-violet-400 dark:text-violet-500/60 hover:text-violet-600 dark:hover:text-violet-400'
                 }`}
               >
                 <Icon />
@@ -75,7 +75,7 @@ export default function Header({ lastUpdated, onRefresh, theme, toggleTheme, vie
           <button
             onClick={toggleTheme}
             title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            className="p-2 rounded-lg border border-gray-200 dark:border-white/[0.08] bg-gray-100 dark:bg-white/[0.04] text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 transition-colors"
+            className="p-2 rounded-lg border border-violet-200 dark:border-violet-500/[0.2] bg-violet-50 dark:bg-violet-500/[0.06] text-violet-500 dark:text-violet-400/60 hover:text-violet-700 dark:hover:text-violet-300 transition-colors"
           >
             {theme === 'dark' ? (
               <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
@@ -91,7 +91,7 @@ export default function Header({ lastUpdated, onRefresh, theme, toggleTheme, vie
           {/* Refresh */}
           <button
             onClick={onRefresh}
-            className="h-8 px-3 rounded-lg text-xs font-mono font-medium border border-gray-200 dark:border-white/[0.08] bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-slate-400 hover:text-gray-800 dark:hover:text-slate-200 hover:bg-gray-200 dark:hover:bg-white/[0.08] transition-colors"
+            className="h-8 px-3 rounded-lg text-xs font-mono font-medium border border-violet-200 dark:border-violet-500/[0.2] bg-violet-50 dark:bg-violet-500/[0.06] text-violet-600 dark:text-violet-400/70 hover:text-violet-800 dark:hover:text-violet-300 hover:bg-violet-100 dark:hover:bg-violet-500/[0.12] transition-colors"
           >
             ↻<span className="hidden sm:inline ml-1.5">Refresh</span>
           </button>

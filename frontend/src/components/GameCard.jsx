@@ -6,8 +6,8 @@ import ConditionsFooter from './ConditionsFooter'
 
 function TeamStat({ label, away, home }) {
   return (
-    <div className="grid grid-cols-3 text-xs py-1.5 border-b border-gray-100 dark:border-white/[0.04] last:border-0">
-      <span className="text-gray-500 dark:text-slate-500 font-medium">{label}</span>
+    <div className="grid grid-cols-3 text-xs py-1.5 border-b border-violet-50 dark:border-violet-500/[0.06] last:border-0">
+      <span className="text-violet-400/70 dark:text-violet-400/40 font-medium">{label}</span>
       <span className="text-center font-mono text-gray-700 dark:text-slate-300">{away ?? '—'}</span>
       <span className="text-center font-mono text-gray-700 dark:text-slate-300">{home ?? '—'}</span>
     </div>
@@ -29,10 +29,10 @@ export default function GameCard({ game }) {
   return (
     <div className={`
       rounded-xl overflow-hidden flex flex-col
-      bg-white dark:bg-[#0d1525]
-      border border-gray-200 dark:border-white/[0.06]
+      bg-white dark:bg-[#100e22]
+      border border-violet-200 dark:border-violet-500/[0.12]
       border-l-4 ${sig.leftBar}
-      shadow-sm dark:shadow-none
+      shadow-sm dark:shadow-[0_4px_32px_rgba(109,40,217,0.08)]
     `}>
 
       {/* ── Top strip: badge + time ── */}
@@ -76,7 +76,7 @@ export default function GameCard({ game }) {
       </div>
 
       {/* ── Divider ── */}
-      <div className="h-px bg-gray-100 dark:bg-white/[0.05] mx-4" />
+      <div className="h-px bg-violet-100 dark:bg-violet-500/[0.08] mx-4" />
 
       {/* ── Model / Market / Edge ── */}
       <ProbabilityBoxes
@@ -92,7 +92,7 @@ export default function GameCard({ game }) {
         <>
           <div className="h-px bg-gray-100 dark:bg-white/[0.05] mx-4" />
           <div className="px-4 py-3">
-            <div className="grid grid-cols-3 text-[10px] uppercase tracking-widest text-gray-400 dark:text-slate-500 pb-1.5 border-b border-gray-100 dark:border-white/[0.04] mb-0.5">
+            <div className="grid grid-cols-3 text-[10px] uppercase tracking-widest text-violet-400/60 dark:text-violet-400/40 pb-1.5 border-b border-violet-100 dark:border-violet-500/[0.08] mb-0.5">
               <span />
               <span className="text-center font-semibold">{game.away_team}</span>
               <span className="text-center font-semibold">{game.home_team}</span>
@@ -121,7 +121,7 @@ export default function GameCard({ game }) {
       )}
 
       {/* ── Divider ── */}
-      <div className="h-px bg-gray-100 dark:bg-white/[0.05] mx-4" />
+      <div className="h-px bg-violet-100 dark:bg-violet-500/[0.08] mx-4" />
 
       {/* ── Pitchers ── */}
       <PitcherMatchup awaySp={game.away_sp} homeSp={game.home_sp} />

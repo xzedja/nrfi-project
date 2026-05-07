@@ -25,7 +25,7 @@ export default function GameModal({ game, onClose }) {
       />
 
       {/* Dialog */}
-      <div className="relative w-full sm:max-w-xl max-h-[92dvh] sm:max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-xl bg-gray-50 dark:bg-[#070c17] shadow-2xl border-t border-white/[0.06]">
+      <div className="relative w-full sm:max-w-xl max-h-[92dvh] sm:max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-xl bg-[#faf8ff] dark:bg-[#090712] shadow-2xl border-t border-violet-200 dark:border-violet-500/[0.15]">
         {/* Drag handle (mobile) */}
         <div className="flex justify-center pt-3 pb-1 sm:hidden">
           <div className="w-10 h-1 rounded-full bg-gray-300 dark:bg-white/10" />

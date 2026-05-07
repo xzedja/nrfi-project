@@ -15,13 +15,17 @@ body {
 @layer base {
   :root {
     --card-bg: #ffffff;
-    --app-bg: #f8fafc;
+    --app-bg: #faf8ff;
   }
   .dark {
-    --card-bg: #0d1525;
-    --app-bg: #070c17;
+    --card-bg: #100e22;
+    --app-bg: #090712;
   }
 }
+
+/* Purple-tinted scrollbar */
+::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.18); }
+::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.30); }
 
 /* Thin scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }

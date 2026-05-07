@@ -1,8 +1,8 @@
 const TABS = [
-  { key: 'all',     label: 'All Games',     dot: null,              activeClass: 'bg-slate-700/80 text-white ring-1 ring-white/10' },
-  { key: 'nrfi',    label: 'NRFI',          dot: 'bg-emerald-500',  activeClass: 'bg-emerald-500/[0.15] text-emerald-400 ring-1 ring-emerald-500/30' },
-  { key: 'yrfi',    label: 'YRFI',          dot: 'bg-sky-500',      activeClass: 'bg-sky-500/[0.15] text-sky-400 ring-1 ring-sky-500/30' },
-  { key: 'no_edge', label: 'No Edge',       dot: 'bg-slate-600',    activeClass: 'bg-slate-700/60 text-slate-400 ring-1 ring-slate-600/50' },
+  { key: 'all',     label: 'All Games', dot: null,             activeClass: 'bg-violet-500/[0.15] text-violet-400 dark:text-violet-300 ring-1 ring-violet-500/30' },
+  { key: 'nrfi',   label: 'NRFI',      dot: 'bg-emerald-500', activeClass: 'bg-emerald-500/[0.12] text-emerald-400 ring-1 ring-emerald-500/25' },
+  { key: 'yrfi',   label: 'YRFI',      dot: 'bg-sky-500',     activeClass: 'bg-sky-500/[0.12] text-sky-400 ring-1 ring-sky-500/25' },
+  { key: 'no_edge',label: 'No Edge',   dot: 'bg-violet-700',  activeClass: 'bg-violet-500/[0.08] text-violet-400/60 ring-1 ring-violet-500/20' },
 ]
 
 export default function FilterTabs({ active, setActive, counts }) {
@@ -18,11 +18,11 @@ export default function FilterTabs({ active, setActive, counts }) {
               flex items-center gap-2 h-8 px-3.5 rounded-lg text-sm font-medium transition-all
               ${isActive
                 ? t.activeClass
-                : 'bg-white/[0.04] dark:bg-white/[0.03] text-slate-500 hover:text-slate-300 hover:bg-white/[0.07] ring-1 ring-white/[0.06] dark:ring-white/[0.05]'}
+                : 'bg-violet-500/[0.05] text-violet-500/60 dark:text-violet-400/40 hover:text-violet-600 dark:hover:text-violet-300 hover:bg-violet-500/[0.10] ring-1 ring-violet-500/[0.10]'}
             `}
           >
             {t.dot && (
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? t.dot : 'bg-slate-600'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? t.dot : 'bg-violet-500/30'}`} />
             )}
             <span>{t.label}</span>
             <span className={`font-mono text-xs ${isActive ? 'opacity-70' : 'opacity-40'}`}>

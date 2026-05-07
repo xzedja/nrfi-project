@@ -45,7 +45,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#070c17] text-gray-900 dark:text-slate-100 transition-colors">
+    <div className="min-h-screen bg-[#faf8ff] dark:bg-[#090712] text-gray-900 dark:text-slate-100 transition-colors">
       <Header
         lastUpdated={lastUpdated}
         onRefresh={refresh}

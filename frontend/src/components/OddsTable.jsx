@@ -9,17 +9,17 @@ export default function OddsTable({ bookmakers, signal }) {
   return (
     <div className="mx-4 mb-3">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-[10px] uppercase tracking-widest font-semibold text-slate-500">Lines</span>
-        <div className="flex-1 h-px bg-white/[0.05]" />
+        <span className="text-[10px] uppercase tracking-widest font-semibold text-violet-400/50 dark:text-violet-400/30">Lines</span>
+        <div className="flex-1 h-px bg-violet-200 dark:bg-violet-500/[0.08]" />
       </div>
 
-      <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-white/[0.06]">
+      <div className="rounded-lg overflow-hidden border border-violet-200 dark:border-violet-500/[0.12]">
         {/* Header */}
-        <div className="grid grid-cols-[1fr_auto_auto_auto] bg-gray-50 dark:bg-white/[0.03] border-b border-gray-200 dark:border-white/[0.05]">
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-slate-500 font-semibold">Book</div>
-          <div className={`px-3 py-1.5 text-[10px] uppercase tracking-widest font-semibold text-center w-20 ${nrfiFocus ? 'text-emerald-500' : 'text-slate-500'}`}>NRFI</div>
-          <div className={`px-3 py-1.5 text-[10px] uppercase tracking-widest font-semibold text-center w-20 ${yrfiFocus ? 'text-sky-500' : 'text-slate-500'}`}>YRFI</div>
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-slate-600 font-semibold text-center w-14">Total</div>
+        <div className="grid grid-cols-[1fr_auto_auto_auto] bg-violet-50 dark:bg-violet-500/[0.05] border-b border-violet-100 dark:border-violet-500/[0.10]">
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-violet-400/60 dark:text-violet-400/40 font-semibold">Book</div>
+          <div className={`px-3 py-1.5 text-[10px] uppercase tracking-widest font-semibold text-center w-20 ${nrfiFocus ? 'text-emerald-500' : 'text-violet-400/40 dark:text-violet-400/30'}`}>NRFI</div>
+          <div className={`px-3 py-1.5 text-[10px] uppercase tracking-widest font-semibold text-center w-20 ${yrfiFocus ? 'text-sky-500' : 'text-violet-400/40 dark:text-violet-400/30'}`}>YRFI</div>
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-widest text-violet-400/40 dark:text-violet-400/30 font-semibold text-center w-14">Total</div>
         </div>
 
         {/* Rows */}
@@ -29,10 +29,10 @@ export default function OddsTable({ bookmakers, signal }) {
             <div
               key={b.source}
               className={`
-                grid grid-cols-[1fr_auto_auto_auto] border-t border-gray-100 dark:border-white/[0.04]
+                grid grid-cols-[1fr_auto_auto_auto] border-t border-violet-100 dark:border-violet-500/[0.06]
                 ${isBest
-                  ? 'bg-white dark:bg-white/[0.04]'
-                  : 'bg-transparent hover:bg-gray-50 dark:hover:bg-white/[0.02]'}
+                  ? 'bg-violet-50/60 dark:bg-violet-500/[0.06]'
+                  : 'bg-transparent hover:bg-violet-50/40 dark:hover:bg-violet-500/[0.03]'}
                 transition-colors
               `}
             >

@@ -2,8 +2,8 @@ import { pct, fmtEra, fmtVelo, fmtRest } from '../utils/signal'
 
 function Chip({ label, value }) {
   return (
-    <div className="flex items-center justify-between gap-2 py-1 border-b border-gray-100 dark:border-white/[0.03] last:border-0">
-      <span className="text-[11px] text-gray-500 dark:text-slate-500 shrink-0">{label}</span>
+    <div className="flex items-center justify-between gap-2 py-1 border-b border-violet-50 dark:border-violet-500/[0.06] last:border-0">
+      <span className="text-[11px] text-violet-400/60 dark:text-violet-400/35 shrink-0">{label}</span>
       <span className="text-[11px] font-mono font-medium text-gray-700 dark:text-slate-300 tabular-nums">{value}</span>
     </div>
   )
@@ -14,10 +14,10 @@ function NrfiChip({ record }) {
   const rate = record.nrfi_rate != null ? pct(record.nrfi_rate) : '—'
   const frac = `${record.nrfi_wins}/${record.total}`
   return (
-    <div className="flex items-center justify-between gap-2 py-1 border-b border-gray-100 dark:border-white/[0.03]">
-      <span className="text-[11px] text-gray-500 dark:text-slate-500 shrink-0">{record.year} NRFI</span>
+    <div className="flex items-center justify-between gap-2 py-1 border-b border-violet-50 dark:border-violet-500/[0.06]">
+      <span className="text-[11px] text-violet-400/60 dark:text-violet-400/35 shrink-0">{record.year} NRFI</span>
       <span className="text-[11px] font-mono font-semibold text-gray-700 dark:text-slate-300 tabular-nums">
-        {rate} <span className="text-gray-400 dark:text-slate-600 font-normal">({frac})</span>
+        {rate} <span className="text-violet-400/40 dark:text-violet-400/25 font-normal">({frac})</span>
       </span>
     </div>
   )
@@ -29,7 +29,7 @@ function PitcherPanel({ pitcher, role }) {
 
   return (
     <div className="flex-1 min-w-0">
-      <p className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">{role}</p>
+      <p className="text-[10px] uppercase tracking-widest text-violet-400/50 dark:text-violet-400/30 mb-1.5">{role}</p>
       <p className="text-sm font-bold text-gray-900 dark:text-white leading-tight truncate mb-2">
         {name}
         {hand && <span className="text-gray-400 dark:text-slate-500 font-normal text-[11px] ml-1.5">{hand}</span>}
