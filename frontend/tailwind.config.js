@@ -3,7 +3,11 @@ export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   darkMode: 'class',
   theme: {
-    extend: {},
+    extend: {
+      fontFamily: {
+        mono: ['JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+      },
+    },
   },
   plugins: [],
 }

@@ -4,4 +4,27 @@
 
 body {
   font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+
+.font-mono, [class*="font-mono"] {
+  font-family: 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
+}
+
+/* Subtle scrollbar in dark mode */
+@layer base {
+  :root {
+    --card-bg: #ffffff;
+    --app-bg: #f8fafc;
+  }
+  .dark {
+    --card-bg: #0d1525;
+    --app-bg: #070c17;
+  }
+}
+
+/* Thin scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.35); }

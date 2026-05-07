@@ -25,26 +25,25 @@ export default function GameModal({ game, onClose }) {
       />
 
       {/* Dialog */}
-      <div className="relative w-full sm:max-w-xl max-h-[92dvh] sm:max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-2xl bg-gray-50 dark:bg-[#0d1424] shadow-2xl">
+      <div className="relative w-full sm:max-w-xl max-h-[92dvh] sm:max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-xl bg-gray-50 dark:bg-[#070c17] shadow-2xl border-t border-white/[0.06]">
         {/* Drag handle (mobile) */}
         <div className="flex justify-center pt-3 pb-1 sm:hidden">
-          <div className="w-10 h-1 rounded-full bg-gray-300 dark:bg-slate-600" />
+          <div className="w-10 h-1 rounded-full bg-gray-300 dark:bg-white/10" />
         </div>
 
         {/* Close button */}
-        <div className="flex justify-end px-4 pt-3 pb-2 sm:pt-4">
+        <div className="flex justify-end px-4 pt-3 pb-2">
           <button
             onClick={onClose}
-            className="text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800"
+            className="text-slate-500 hover:text-slate-200 transition-colors p-1.5 rounded-lg hover:bg-white/[0.06]"
             aria-label="Close"
           >
-            <svg viewBox="0 0 16 16" fill="currentColor" className="w-5 h-5">
+            <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
               <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z" />
             </svg>
           </button>
         </div>
 
-        {/* GameCard rendered inside modal — no outer padding so card fills naturally */}
         <div className="px-4 pb-6">
           <GameCard game={game} />
         </div>

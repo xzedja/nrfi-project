@@ -25,11 +25,8 @@ export default function App() {
 
   useEffect(() => {
     const root = document.documentElement
-    if (theme === 'dark') {
-      root.classList.add('dark')
-    } else {
-      root.classList.remove('dark')
-    }
+    if (theme === 'dark') root.classList.add('dark')
+    else root.classList.remove('dark')
     localStorage.setItem('nrfi-theme', theme)
   }, [theme])
 
@@ -38,7 +35,6 @@ export default function App() {
   }, [viewMode])
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark')
-
   const filtered = filterGames(games, activeFilter)
 
   const counts = {
@@ -49,7 +45,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#020617] text-gray-900 dark:text-slate-100">
+    <div className="min-h-screen bg-gray-50 dark:bg-[#070c17] text-gray-900 dark:text-slate-100 transition-colors">
       <Header
         lastUpdated={lastUpdated}
         onRefresh={refresh}
@@ -61,22 +57,23 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-4 py-6">
         <SeasonStats stats={seasonStats} loading={statsLoading} />
-
         <FilterTabs active={activeFilter} setActive={setActiveFilter} counts={counts} />
 
         {loading && (
-          <div className="flex items-center justify-center py-32">
-            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500" />
+          <div className="flex items-center justify-center py-32 gap-3">
+            <div className="w-2 h-2 rounded-full bg-slate-500 animate-bounce [animation-delay:-0.3s]" />
+            <div className="w-2 h-2 rounded-full bg-slate-500 animate-bounce [animation-delay:-0.15s]" />
+            <div className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" />
           </div>
         )}
 
         {error && (
-          <div className="rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800/50 p-5 text-red-600 dark:text-red-400 text-sm">
+          <div className="rounded-xl bg-red-950/40 border border-red-800/40 p-5 text-red-400 text-sm">
             <p className="font-semibold mb-1">Failed to load games</p>
-            <p className="text-red-400">{error}</p>
+            <p className="text-red-500/70">{error}</p>
             <button
               onClick={refresh}
-              className="mt-3 text-xs px-3 py-1.5 rounded-md bg-red-100 dark:bg-red-900/50 hover:bg-red-200 dark:hover:bg-red-900 transition-colors"
+              className="mt-3 text-xs px-3 py-1.5 rounded-md bg-red-900/40 hover:bg-red-900/60 transition-colors border border-red-800/40"
             >
               Try again
             </button>
@@ -84,10 +81,10 @@ export default function App() {
         )}
 
         {!loading && !error && filtered.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-32 text-gray-400 dark:text-slate-600">
-            <span className="text-5xl mb-4">⚾</span>
-            <p className="text-lg font-semibold text-gray-500 dark:text-slate-500">No games to display</p>
-            <p className="text-sm mt-1">
+          <div className="flex flex-col items-center justify-center py-32 text-slate-600">
+            <span className="text-5xl mb-4 opacity-30">⚾</span>
+            <p className="text-base font-semibold text-slate-500">No games to display</p>
+            <p className="text-sm mt-1 text-slate-600">
               {games.length === 0
                 ? "Run the daily pipeline to load today's games."
                 : 'No games match the selected filter.'}
