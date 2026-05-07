@@ -172,10 +172,10 @@ def _fetch_event_ids(date_str: str) -> dict[tuple[str, str], str]:
         return {}
 
 
-def _fetch_first_inn_odds(event_id: str) -> dict[str, int | None]:
+def _fetch_first_inn_odds_all(event_id: str) -> dict[str, dict[str, int | None]]:
     """
-    Fetch totals_1st_1_innings odds for a single event via the event-specific endpoint.
-    Returns {over_odds, under_odds} from the preferred bookmaker, or Nones if unavailable.
+    Fetch totals_1st_1_innings odds for ALL bookmakers for a single event.
+    Returns {bookmaker_key: {over_odds, under_odds}}.
     """
     settings = get_settings()
     try:
@@ -192,13 +192,10 @@ def _fetch_first_inn_odds(event_id: str) -> dict[str, int | None]:
         resp.raise_for_status()
     except requests.RequestException as exc:
         logger.warning("Failed to fetch first-inning odds for event %s: %s", event_id, exc)
-        return {"over_odds": None, "under_odds": None}
+        return {}
 
-    bookmakers = resp.json().get("bookmakers", [])
-
-    # Build lookup: bookmaker_key → {over_odds, under_odds}
-    bm_odds: dict[str, dict] = {}
-    for bm in bookmakers:
+    bm_odds: dict[str, dict[str, int | None]] = {}
+    for bm in resp.json().get("bookmakers", []):
         for market in bm.get("markets", []):
             if market["key"] != "totals_1st_1_innings":
                 continue
@@ -211,16 +208,17 @@ def _fetch_first_inn_odds(event_id: str) -> dict[str, int | None]:
             if over is not None and under is not None:
                 bm_odds[bm["key"]] = {"over_odds": over, "under_odds": under}
 
-    if not bm_odds:
-        return {"over_odds": None, "under_odds": None}
+    return bm_odds
 
-    # Pick preferred bookmaker
+
+def _preferred_first_inn(bm_odds: dict[str, dict[str, int | None]]) -> dict[str, int | None]:
+    """Pick the preferred bookmaker's first-inning odds for p_nrfi_market computation."""
     for key in _FIRST_INN_BOOKMAKER_PREFERENCE:
         if key in bm_odds:
             return bm_odds[key]
-
-    # Fall back to first available
-    return next(iter(bm_odds.values()))
+    if bm_odds:
+        return next(iter(bm_odds.values()))
+    return {"over_odds": None, "under_odds": None}
 
 
 def _extract_best_markets(game: dict, preferred: str) -> dict[str, Any]:
@@ -355,74 +353,80 @@ def fetch_and_store_odds(date_str: str | None = None, db: Session | None = None)
                 )
                 continue
 
-            markets = _extract_best_markets(game_odds, _PREFERRED_BOOKMAKER)
-            if not markets:
+            # Build per-bookmaker h2h + totals data
+            all_bm_data: dict[str, dict[str, Any]] = {}
+            for bm in game_odds.get("bookmakers", []):
+                parsed = _parse_markets(bm)
+                parsed["home_ml"] = parsed.pop(f"_h2h_{home_full}", None)
+                parsed["away_ml"] = parsed.pop(f"_h2h_{away_full}", None)
+                # Remove any leftover _h2h_ keys
+                for k in [k for k in parsed if k.startswith("_h2h_")]:
+                    parsed.pop(k)
+                # Sanity-check total
+                raw_total = parsed.get("total")
+                if raw_total is not None and not (5.0 <= raw_total <= 15.0):
+                    parsed["total"] = parsed["total_over_odds"] = parsed["total_under_odds"] = None
+                all_bm_data[bm["key"]] = parsed
+
+            if not all_bm_data:
                 continue
 
-            # Map h2h outcome names (full names) to home/away ml
-            home_ml = markets.pop(f"_h2h_{home_full}", None)
-            away_ml = markets.pop(f"_h2h_{away_full}", None)
-            source = markets.pop("_source", _PREFERRED_BOOKMAKER)
-            # Clean up any leftover _h2h_ keys
-            for k in [k for k in markets if k.startswith("_h2h_")]:
-                markets.pop(k)
-
-            # Sanity-check the total — alternate/half-game lines slip in from
-            # fallback bookmakers (e.g. 3.5 = first-5 total, 11.5 = alt line).
-            # MLB full-game totals are always in the 5–15 range.
-            raw_total = markets["total"]
-            logger.info(
-                "  %s @ %s — total=%s home_ml=%s away_ml=%s",
-                away_abbrev, home_abbrev, raw_total,
-                markets.get("home_ml"), markets.get("away_ml"),
-            )
-            if raw_total is not None and not (5.0 <= raw_total <= 15.0):
-                logger.warning(
-                    "Skipping implausible total %.1f for %s @ %s — likely alternate market.",
-                    raw_total, away_abbrev, home_abbrev,
-                )
-                markets["total"] = None
-                markets["total_over_odds"] = None
-                markets["total_under_odds"] = None
-
-            # Fetch first-inning odds via event-specific endpoint
+            # Fetch first-inning odds for ALL bookmakers
             event_id = event_id_map.get((home_full, away_full))
-            first_inn = {"over_odds": None, "under_odds": None}
+            first_inn_all: dict[str, dict[str, int | None]] = {}
             if event_id:
-                first_inn = _fetch_first_inn_odds(event_id)
+                first_inn_all = _fetch_first_inn_odds_all(event_id)
 
-            # Upsert: update existing odds row rather than inserting a duplicate
-            odds_row = db.query(Odds).filter_by(game_id=game.id, source=source).first()
-            if odds_row is None:
-                odds_row = Odds(game_id=game.id, source=source, market="total")
-                db.add(odds_row)
-            odds_row.home_ml = home_ml
-            odds_row.away_ml = away_ml
-            odds_row.total = markets["total"]
-            odds_row.total_over_odds = markets["total_over_odds"]
-            odds_row.total_under_odds = markets["total_under_odds"]
-            odds_row.first_inn_over_odds = first_inn["over_odds"]
-            odds_row.first_inn_under_odds = first_inn["under_odds"]
-            odds_row.fetched_at = datetime.now(timezone.utc)
+            # Merge: union of all bookmakers that have either h2h/totals or 1st-inn odds
+            all_sources = set(all_bm_data) | set(first_inn_all)
+            now = datetime.now(timezone.utc)
 
-            # Compute p_nrfi_market: prefer actual first-inning odds, fall back to Poisson
+            for source in all_sources:
+                bm = all_bm_data.get(source, {})
+                fi  = first_inn_all.get(source, {"over_odds": None, "under_odds": None})
+
+                odds_row = db.query(Odds).filter_by(game_id=game.id, source=source).first()
+                if odds_row is None:
+                    odds_row = Odds(game_id=game.id, source=source, market="total")
+                    db.add(odds_row)
+
+                odds_row.home_ml             = bm.get("home_ml")
+                odds_row.away_ml             = bm.get("away_ml")
+                odds_row.total               = bm.get("total")
+                odds_row.total_over_odds     = bm.get("total_over_odds")
+                odds_row.total_under_odds    = bm.get("total_under_odds")
+                odds_row.first_inn_over_odds = fi["over_odds"]
+                odds_row.first_inn_under_odds = fi["under_odds"]
+                odds_row.fetched_at          = now
+
+            # Log summary using preferred bookmaker
+            pref_bm = all_bm_data.get(_PREFERRED_BOOKMAKER) or next(iter(all_bm_data.values()))
+            logger.info(
+                "  %s @ %s — total=%s home_ml=%s  bookmakers=%d  1st-inn books=%d",
+                away_abbrev, home_abbrev,
+                pref_bm.get("total"), pref_bm.get("home_ml"),
+                len(all_sources), len(first_inn_all),
+            )
+
+            # Compute p_nrfi_market from preferred bookmaker's first-inn odds (Poisson fallback)
             feat = db.query(NrfiFeatures).filter_by(game_id=game.id).first()
             if feat is not None:
-                if first_inn["over_odds"] is not None and first_inn["under_odds"] is not None:
-                    p_yrfi_raw = american_to_implied(first_inn["over_odds"])
-                    p_nrfi_raw = american_to_implied(first_inn["under_odds"])
+                first_inn_pref = _preferred_first_inn(first_inn_all)
+                if first_inn_pref["over_odds"] is not None and first_inn_pref["under_odds"] is not None:
+                    p_yrfi_raw = american_to_implied(first_inn_pref["over_odds"])
+                    p_nrfi_raw = american_to_implied(first_inn_pref["under_odds"])
                     _, p_nrfi = remove_vig(p_yrfi_raw, p_nrfi_raw)
                     feat.p_nrfi_market = round(p_nrfi, 4)
                     logger.info(
                         "  %s @ %s — 1st inn: NRFI %s / YRFI %s → P(NRFI)=%.3f",
                         away_abbrev, home_abbrev,
-                        first_inn["under_odds"], first_inn["over_odds"], p_nrfi,
+                        first_inn_pref["under_odds"], first_inn_pref["over_odds"], p_nrfi,
                     )
-                elif markets["total"] is not None:
-                    feat.p_nrfi_market = round(estimate_p_nrfi_from_total(markets["total"]), 4)
+                elif pref_bm.get("total") is not None:
+                    feat.p_nrfi_market = round(estimate_p_nrfi_from_total(pref_bm["total"]), 4)
                     logger.info(
                         "  %s @ %s — no 1st inn odds, using total %.1f → P(NRFI)=%.3f",
-                        away_abbrev, home_abbrev, markets["total"], feat.p_nrfi_market,
+                        away_abbrev, home_abbrev, pref_bm["total"], feat.p_nrfi_market,
                     )
 
             matched += 1

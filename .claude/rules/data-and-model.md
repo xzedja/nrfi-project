@@ -227,7 +227,7 @@ See `backend/modeling/train_model.py` for the full list. Weather, umpire, park f
 - Winner is Platt-calibrated using a logistic regression fit on calib set raw scores → saved as `CalibratedModel`.
 - Evaluates AUC, log loss, Brier score on all splits; empty splits (e.g. empty test set) are skipped safely.
 - Saves training metadata to `models/nrfi_model.meta.json`: training date ranges, game counts, AUC, Brier per split.
-- **Current trained model: XGBoost** (val AUC 0.5698 vs LR 0.5593). With 2015+ data XGB now generalises well; LR was preferred on the smaller 2023+ dataset.
+- **Current trained model: XGBoost** (val AUC 0.5617 vs LR 0.5586). With 2015+ data XGB now generalises well; LR was preferred on the smaller 2023+ dataset. Val AUC varies ~±0.01 between weekly retrains due to 7-day window size.
 - Retrain manually: `docker exec -it nrfi-backend-1 python -m backend.modeling.train_model` (container name is `nrfi-backend-1`, NOT `nrfi-project-backend-1`).
 - Retrain automatically: every Sunday at 8:00 AM via cron (before daily pipeline at 8:30 AM).
 - **Delta model (XGBRegressor on residual y' = nrfi_label - p_nrfi_market) was tried and reverted.** It produced uniform YRFI bias at season start because without Statcast data all features impute to median, outputting a constant ~-10% delta for every game. Do not reintroduce until rolling pitcher features are populated (typically 5–6 weeks into season).

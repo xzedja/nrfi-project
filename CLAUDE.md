@@ -116,7 +116,8 @@ All phases below are done. New work should extend, not rebuild them.
 35. ✅ Market-known features removed from `FEATURE_COLS`: `park_factor`, `temperature_f`, `wind_speed_mph`, `wind_out_mph`, `is_dome`, `ump_nrfi_rate_above_avg`, `p_nrfi_market`, `park_x_wind_out`. Model now trained on pre-game knowable features only; `edge` computed at prediction time only.
 36. ✅ `home_team_nrfi_rate_l30` / `away_team_nrfi_rate_l30` added as model features — rolling 30-game cross-season NRFI rate per team (min 10 games, else NULL → median-imputed). Migration: `migrate_add_team_nrfi_rate.py`; backfill: `backfill_team_nrfi_rate.py`.
 37. ✅ Pick threshold raised 2% → 4% (`VALUE_PLAY_THRESHOLD_PP` env var default changed to `"4"`); `_ANTI_SIGNAL_THRESHOLD` aligned to 7% (above pick threshold) to avoid impossible tier condition.
-38. ✅ Current trained model: **XGBoost** (val AUC 0.5698 vs LR 0.5593 on 2,387-game calib set). LR was winner previously; expanded 2015+ dataset gives XGB more signal to learn from.
+38. ✅ Current trained model: **XGBoost** (val AUC 0.5617 vs LR 0.5586 on 2,387-game calib set). LR was winner previously; expanded 2015+ dataset gives XGB more signal to learn from.
+39. ✅ `home_sp_nrfi_rate_season` / `away_sp_nrfi_rate_season` added as model features — pitcher's in-season fraction of starts where they held the opponent scoreless in their half of the 1st inning (min 3 starts, else NULL → SeasonStartImputer proxies to `home_sp_hold_rate`). Migration: `migrate_add_pitcher_nrfi_rate.py`; backfill: `backfill_pitcher_nrfi_rate.py`. Both features show non-zero XGBoost importance (0.032–0.034).
 
 ## Known Gaps (not yet implemented)
 
