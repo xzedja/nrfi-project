@@ -111,22 +111,13 @@ def run_backtest(
 
     # -----------------------------------------------------------------------
     # Batch predict using current model on stored features
-    # Interaction features are derived the same way as train_model.py
     # -----------------------------------------------------------------------
-    _DERIVED = {"home_sp_era_minus_away", "lineup_obp_diff"}
-    _BASE_COLS = [c for c in FEATURE_COLS if c not in _DERIVED]
-
     records = []
     for game, feat in rows:
-        rec: dict = {}
-        for col in _BASE_COLS:
-            rec[col] = getattr(feat, col, None)
+        rec: dict = {col: getattr(feat, col, None) for col in FEATURE_COLS}
         records.append(rec)
 
     feat_df = pd.DataFrame(records)
-    feat_df["home_sp_era_minus_away"] = feat_df["home_sp_era"] - feat_df["away_sp_era"]
-    feat_df["lineup_obp_diff"]        = feat_df["away_lineup_obp"] - feat_df["home_lineup_obp"]
-
     p_model_arr = model.predict_proba(feat_df[FEATURE_COLS])[:, 1]
 
     # -----------------------------------------------------------------------
