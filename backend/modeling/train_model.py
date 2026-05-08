@@ -4,28 +4,25 @@ backend/modeling/train_model.py
 Trains an XGBoost model to predict NRFI probability and compares it against
 a logistic regression baseline.
 
-Features used (all pre-game, no leakage):
-  Prior-season Fangraphs stats:
-    home_sp_era, home_sp_fip, home_sp_whip, home_sp_k_pct, home_sp_bb_pct, home_sp_hr9
-    away_sp_era, away_sp_fip, away_sp_whip, away_sp_k_pct, away_sp_bb_pct, away_sp_hr9
+Features used (all pre-game, no leakage) — 26 active features:
   Within-season rolling stats (last 5 starts):
     home_sp_last5_era, home_sp_last5_whip, home_sp_first_inn_era
     home_sp_avg_velo, home_sp_velo_trend, home_sp_days_rest
     away_sp_last5_era, away_sp_last5_whip, away_sp_first_inn_era
     away_sp_avg_velo, away_sp_velo_trend, away_sp_days_rest
-  Team offense:
-    home_team_first_inn_runs_per_game, away_team_first_inn_runs_per_game
-    home_team_obp, away_team_obp, home_team_slg, away_team_slg
-  Game-specific lineup strength (prior-season avg OBP of starting 9):
-    home_lineup_obp, away_lineup_obp
-  Park:
-    park_factor
-  Weather (None for dome parks, imputed to median):
-    temperature_f, wind_speed_mph, wind_out_mph, is_dome
-  Umpire:
-    ump_nrfi_rate_above_avg
-  Pitcher prior-season hold rate (fraction of 1st-inning scoreless starts):
+  First-inning Statcast (season-to-date prior starts):
+    home_sp_first_inn_k_pct, home_sp_first_inn_bb_pct, home_sp_first_inn_hard_pct
+    away_sp_first_inn_k_pct, away_sp_first_inn_bb_pct, away_sp_first_inn_hard_pct
+  Pitcher hold rates (prior-season + in-season):
     home_sp_hold_rate, away_sp_hold_rate
+    home_sp_nrfi_rate_season, away_sp_nrfi_rate_season
+  Team first-inning offense:
+    home_team_first_inn_runs_per_game, away_team_first_inn_runs_per_game
+    home_team_nrfi_rate_l30, away_team_nrfi_rate_l30
+
+  Removed (zero importance in both LR and XGB):
+    Prior-season Fangraphs ERA/FIP/WHIP/K%/BB%/HR9, team OBP/SLG,
+    lineup OBP, and derived interaction features.
 
 Split strategy: chronological (no shuffling) — prevents future leakage.
 
@@ -66,19 +63,6 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 FEATURE_COLS = [
-    # Prior-season Fangraphs pitcher stats
-    "home_sp_era",
-    "home_sp_fip",
-    "home_sp_whip",
-    "home_sp_k_pct",
-    "home_sp_bb_pct",
-    "home_sp_hr9",
-    "away_sp_era",
-    "away_sp_fip",
-    "away_sp_whip",
-    "away_sp_k_pct",
-    "away_sp_bb_pct",
-    "away_sp_hr9",
     # Within-season rolling (last 5 starts)
     "home_sp_last5_era",
     "home_sp_last5_whip",
@@ -92,43 +76,23 @@ FEATURE_COLS = [
     "away_sp_avg_velo",
     "away_sp_velo_trend",
     "away_sp_days_rest",
-    # Team offense
-    "home_team_first_inn_runs_per_game",
-    "away_team_first_inn_runs_per_game",
-    "home_team_obp",
-    "away_team_obp",
-    "home_team_slg",
-    "away_team_slg",
-    # Rolling team NRFI rate (last 30 games, cross-season)
-    # Captures team-level clustering tendencies not captured by R/G alone.
-    # Market prices this in with a lag; we compute it precisely.
-    "home_team_nrfi_rate_l30",
-    "away_team_nrfi_rate_l30",
-    # Game-specific lineup strength (prior-season avg OBP of starting 9)
-    "home_lineup_obp",
-    "away_lineup_obp",
-    # Interaction features (derived at load time)
-    "home_sp_era_minus_away", # home_sp_era − away_sp_era — relative pitcher quality
-    "lineup_obp_diff",        # away_lineup_obp − home_lineup_obp — net offensive matchup
-    # First-inning specific Statcast features (season-to-date prior starts)
+    # First-inning specific Statcast (season-to-date prior starts)
     "home_sp_first_inn_k_pct",
     "home_sp_first_inn_bb_pct",
     "home_sp_first_inn_hard_pct",
     "away_sp_first_inn_k_pct",
     "away_sp_first_inn_bb_pct",
     "away_sp_first_inn_hard_pct",
-    # Pitcher prior-season first-inning hold rate
+    # Pitcher hold rates (prior-season + in-season)
     "home_sp_hold_rate",
     "away_sp_hold_rate",
-    # Pitcher in-season NRFI hold rate (current season, prior starts, min 3)
-    # Captures current-season tendency to hold opponents scoreless in the 1st.
-    # NULL at season start → SeasonStartImputer proxies to home_sp_hold_rate.
     "home_sp_nrfi_rate_season",
     "away_sp_nrfi_rate_season",
-    # NOTE: park_factor, weather, ump_nrfi_rate_above_avg, and p_nrfi_market removed.
-    # The market already prices these in. Including them caused double-counting and
-    # anchored the model to the market rather than forming an independent view.
-    # Edge = p_nrfi_model - p_nrfi_market is computed at prediction time only.
+    # Team first-inning offense
+    "home_team_first_inn_runs_per_game",
+    "away_team_first_inn_runs_per_game",
+    "home_team_nrfi_rate_l30",
+    "away_team_nrfi_rate_l30",
 ]
 
 # Earliest season included. 2015+ gives ~50k rows vs ~7k for 2023+.
@@ -151,10 +115,6 @@ def load_feature_dataframe() -> pd.DataFrame:
     Load NrfiFeatures joined with Game.game_date from the DB.
     Returns a DataFrame sorted chronologically with interaction features added.
     """
-    # Base DB columns (exclude derived interaction features)
-    _DERIVED = {"home_sp_era_minus_away", "lineup_obp_diff"}
-    _BASE_COLS = [c for c in FEATURE_COLS if c not in _DERIVED]
-
     db = SessionLocal()
     try:
         rows = (
@@ -173,17 +133,11 @@ def load_feature_dataframe() -> pd.DataFrame:
     records = []
     for feat, game_date in rows:
         record: dict[str, Any] = {"game_date": game_date, "nrfi_label": feat.nrfi_label}
-        for col in _BASE_COLS:
+        for col in FEATURE_COLS:
             record[col] = getattr(feat, col, None)
         records.append(record)
 
-    df = pd.DataFrame(records)
-
-    # Derived interaction features (NaN-safe — NaN propagates when either input is NaN)
-    df["home_sp_era_minus_away"] = df["home_sp_era"] - df["away_sp_era"]
-    df["lineup_obp_diff"]        = df["away_lineup_obp"] - df["home_lineup_obp"]
-
-    return df
+    return pd.DataFrame(records)
 
 
 def _audit_nrfi_rates(df: pd.DataFrame) -> None:

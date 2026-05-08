@@ -20,39 +20,22 @@ from xgboost import XGBClassifier
 
 class SeasonStartImputer(BaseEstimator, TransformerMixin):
     """
-    Two-pass imputer that handles start-of-season NULLs intelligently.
+    Two-pass imputer that handles start-of-season NULLs.
 
-    Pass 1 — pitcher-specific proxy fill (row-level):
-      NULL rolling features are filled with the same pitcher's prior-season
-      equivalent from the same row, rather than the league median.
-      e.g. home_sp_last5_era = NULL → use home_sp_era
-           home_sp_velo_trend = NULL → use 0.0 (no trend = neutral)
+    Pass 1 — proxy fill (row-level):
+      NULL in-season NRFI rate → use prior-season hold rate from same row.
+      NULL velo_trend → 0.0 (neutral).
 
     Pass 2 — median fill for anything still NULL after pass 1.
-
-    This ensures start-of-season games show pitcher-specific predictions
-    rather than collapsing every game to the league average.
     """
 
-    # (null_col, proxy_col) — proxy is from the same row
+    # (null_col, proxy_col) — proxy is from the same row.
+    # Only pairs where both columns are in FEATURE_COLS; all others fall through
+    # to median imputation in pass 2.
     PROXY_MAP = [
-        ("home_sp_last5_era",     "home_sp_era"),
-        ("home_sp_last5_whip",    "home_sp_whip"),
-        ("home_sp_first_inn_era", "home_sp_era"),
-        ("away_sp_last5_era",     "away_sp_era"),
-        ("away_sp_last5_whip",    "away_sp_whip"),
-        ("away_sp_first_inn_era", "away_sp_era"),
-        # Lineup OBP fallback: use prior-season team OBP if game-specific lineup is unavailable
-        ("home_lineup_obp",            "home_team_obp"),
-        ("away_lineup_obp",            "away_team_obp"),
-        # First-inning K%/BB% fallback: use full-game prior-season rates if no in-season starts yet
-        ("home_sp_first_inn_k_pct",    "home_sp_k_pct"),
-        ("home_sp_first_inn_bb_pct",   "home_sp_bb_pct"),
-        ("away_sp_first_inn_k_pct",    "away_sp_k_pct"),
-        ("away_sp_first_inn_bb_pct",   "away_sp_bb_pct"),
-        # In-season NRFI rate fallback: use prior-season hold rate until 3 starts are available
-        ("home_sp_nrfi_rate_season",   "home_sp_hold_rate"),
-        ("away_sp_nrfi_rate_season",   "away_sp_hold_rate"),
+        # In-season NRFI rate → prior-season hold rate (both active features)
+        ("home_sp_nrfi_rate_season", "home_sp_hold_rate"),
+        ("away_sp_nrfi_rate_season", "away_sp_hold_rate"),
     ]
     # Velocity trend: no starts yet → neutral (0 = no change)
     ZERO_COLS = ["home_sp_velo_trend", "away_sp_velo_trend"]

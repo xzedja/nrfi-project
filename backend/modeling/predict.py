@@ -43,13 +43,7 @@ def _get_model():
 
 def _features_to_series(feat: NrfiFeatures) -> pd.DataFrame:
     """Convert a NrfiFeatures ORM row into a single-row DataFrame for the model."""
-    _DERIVED = {"home_sp_era_minus_away", "lineup_obp_diff"}
-    row = {col: getattr(feat, col, None) for col in FEATURE_COLS if col not in _DERIVED}
-
-    # Compute interaction features (same logic as train_model.load_feature_dataframe)
-    row["home_sp_era_minus_away"] = (feat.home_sp_era - feat.away_sp_era) if feat.home_sp_era is not None and feat.away_sp_era is not None else None
-    row["lineup_obp_diff"]        = (feat.away_lineup_obp - feat.home_lineup_obp) if feat.away_lineup_obp is not None and feat.home_lineup_obp is not None else None
-
+    row = {col: getattr(feat, col, None) for col in FEATURE_COLS}
     return pd.DataFrame([row])
 
 
