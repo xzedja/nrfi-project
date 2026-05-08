@@ -12,7 +12,7 @@ import os
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import extract, or_
 from sqlalchemy.orm import Session, joinedload
@@ -185,6 +185,14 @@ class SeasonStatsResponse(BaseModel):
     prior_year: YearStats
 
 
+class SimulatorEntry(BaseModel):
+    date: str
+    signal: str
+    edge: float
+    p_nrfi_market: float
+    nrfi_result: bool
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _implied_pct(american_odds: int | None) -> float | None:
@@ -305,9 +313,15 @@ def _pitcher_detail(
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.get("/today", response_model=list[DashboardGame])
-def dashboard_today(db: Session = Depends(get_db)):
-    """Return enriched game data for today's dashboard."""
-    today = date.today()
+def dashboard_today(
+    date_str: str | None = Query(None, alias="date"),
+    db: Session = Depends(get_db),
+):
+    """Return enriched game data for any date (defaults to today)."""
+    try:
+        today = date.fromisoformat(date_str) if date_str else date.today()
+    except ValueError:
+        today = date.today()
 
     games = (
         db.query(Game)
@@ -477,6 +491,39 @@ def _year_stats(db: Session, year: int) -> YearStats:
         model_picks=_signal_record(model_wins, model_losses),
         yrfi_signal=_signal_record(yrfi_wins, yrfi_losses),
     )
+
+
+@router.get("/simulator", response_model=list[SimulatorEntry])
+def simulator_data(
+    start_year: int = Query(default=None, alias="start_year"),
+    db: Session = Depends(get_db),
+):
+    """Return historical bet results for the bankroll simulator."""
+    year = start_year or date.today().year
+    rows = (
+        db.query(NrfiFeatures, Game)
+        .join(Game, NrfiFeatures.game_id == Game.id)
+        .filter(
+            extract("year", Game.game_date) >= year,
+            NrfiFeatures.nrfi_label.isnot(None),
+            NrfiFeatures.p_nrfi_model.isnot(None),
+            NrfiFeatures.p_nrfi_market.isnot(None),
+        )
+        .order_by(Game.game_date)
+        .all()
+    )
+    result = []
+    for feat, game in rows:
+        edge = round(feat.p_nrfi_model - feat.p_nrfi_market, 4)
+        sig = _signal(feat.p_nrfi_market, edge)
+        result.append(SimulatorEntry(
+            date=str(game.game_date),
+            signal=sig,
+            edge=edge,
+            p_nrfi_market=round(feat.p_nrfi_market, 4),
+            nrfi_result=bool(feat.nrfi_label),
+        ))
+    return result
 
 
 @router.get("/season-stats", response_model=SeasonStatsResponse)

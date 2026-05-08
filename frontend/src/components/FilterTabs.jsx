@@ -5,7 +5,7 @@ const TABS = [
   { key: 'no_edge',label: 'No Edge',   dot: 'bg-violet-700',  activeClass: 'bg-violet-500/[0.08] text-violet-400/60 ring-1 ring-violet-500/20' },
 ]
 
-export default function FilterTabs({ active, setActive, counts }) {
+export default function FilterTabs({ active, setActive, counts, sortBy, setSortBy }) {
   return (
     <div className="flex items-center gap-2 flex-wrap mb-5">
       {TABS.map(t => {
@@ -31,6 +31,23 @@ export default function FilterTabs({ active, setActive, counts }) {
           </button>
         )
       })}
+
+      {/* Sort toggle */}
+      <div className="ml-auto flex items-center gap-1 rounded-lg ring-1 ring-violet-500/[0.12] bg-violet-500/[0.04] p-0.5">
+        {['signal', 'time'].map(opt => (
+          <button
+            key={opt}
+            onClick={() => setSortBy(opt)}
+            className={`h-7 px-3 rounded-md text-xs font-semibold tracking-wide transition-all capitalize ${
+              sortBy === opt
+                ? 'bg-violet-500/[0.18] text-violet-300 dark:text-violet-300'
+                : 'text-violet-500/50 dark:text-violet-400/35 hover:text-violet-400/70'
+            }`}
+          >
+            {opt === 'signal' ? 'Signal' : 'Time'}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
