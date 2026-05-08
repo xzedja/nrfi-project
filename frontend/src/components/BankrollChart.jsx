@@ -20,7 +20,7 @@ export default function BankrollChart({ entries }) {
 
   const modelPts = computeSeries(
     entries,
-    e => e.signal === 'nrfi_strong' || e.signal === 'nrfi_lean',
+    e => (e.signal === 'nrfi_strong' || e.signal === 'nrfi_lean') && e.edge != null,
     e => e.nrfi_result === true,
   )
   const yrfiPts = computeSeries(

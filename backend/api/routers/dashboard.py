@@ -70,10 +70,11 @@ def _fmt_time(utc_str: str | None, tz: ZoneInfo) -> str | None:
 
 
 def _signal(p_market: float | None, edge: float | None) -> str:
+    # YRFI signal is purely market-driven — fires without a model prediction
+    if p_market is not None and p_market >= _YRFI_THRESH:
+        return "yrfi_signal"
     if p_market is None or edge is None or abs(edge) < _EDGE_ZERO:
         return "no_edge"
-    if p_market >= _YRFI_THRESH:
-        return "yrfi_signal"
     if edge >= _VALUE_THRESH:
         return "nrfi_strong"
     if edge > _EDGE_ZERO:
@@ -188,7 +189,7 @@ class SeasonStatsResponse(BaseModel):
 class SimulatorEntry(BaseModel):
     date: str
     signal: str
-    edge: float
+    edge: float | None
     p_nrfi_market: float
     nrfi_result: bool
 
@@ -506,7 +507,6 @@ def simulator_data(
         .filter(
             extract("year", Game.game_date) >= year,
             NrfiFeatures.nrfi_label.isnot(None),
-            NrfiFeatures.p_nrfi_model.isnot(None),
             NrfiFeatures.p_nrfi_market.isnot(None),
         )
         .order_by(Game.game_date)
@@ -514,7 +514,11 @@ def simulator_data(
     )
     result = []
     for feat, game in rows:
-        edge = round(feat.p_nrfi_model - feat.p_nrfi_market, 4)
+        edge = (
+            round(feat.p_nrfi_model - feat.p_nrfi_market, 4)
+            if feat.p_nrfi_model is not None
+            else None
+        )
         sig = _signal(feat.p_nrfi_market, edge)
         result.append(SimulatorEntry(
             date=str(game.game_date),
