@@ -366,7 +366,7 @@ def _build_picks_embeds(target_date: str) -> list[dict[str, Any]]:
 
         value_plays  = sum(1 for p in preds if p.get("edge") is not None and p["edge"] >= _VALUE_PLAY_THRESHOLD)
         leans        = sum(1 for p in preds if p.get("edge") is not None and 0 < p["edge"] < _VALUE_PLAY_THRESHOLD)
-        yrfi_signals = sum(1 for p in preds if p.get("p_nrfi_market") is not None and p["p_nrfi_market"] >= _YRFI_SIGNAL_THRESHOLD)
+        yrfi_signals = sum(1 for p in preds if p.get("p_nrfi_market") is not None and p["p_nrfi_market"] >= _YRFI_SIGNAL_THRESHOLD and p.get("is_dome") != 1.0)
         no_lines     = sum(1 for p in preds if p.get("edge") is None)
 
         parts = [f"{len(preds)} games today"]
@@ -474,6 +474,10 @@ def _build_yrfi_signals_embed(target_date: str) -> dict[str, Any]:
                 continue
             market = pred.get("p_nrfi_market")
             if market is None or market < _YRFI_SIGNAL_THRESHOLD:
+                continue
+            from backend.db.models import NrfiFeatures as _NF
+            feat_row = db.query(_NF).filter_by(game_id=game.id).first()
+            if feat_row and feat_row.is_dome == 1.0:
                 continue
 
             gp = db.query(GamePitchers).filter_by(game_id=game.id).first()
@@ -646,7 +650,7 @@ def _build_yesterday_embed() -> dict[str, Any]:
                 nrfi_w += int(won)
                 nrfi_l += int(not won)
 
-            if p_market >= _YRFI_SIGNAL_THRESHOLD:
+            if p_market >= _YRFI_SIGNAL_THRESHOLD and feat.is_dome != 1.0:
                 won_yrfi = not actual_nrfi
                 icon = "✅" if won_yrfi else "❌"
                 outcome = "YRFI ✓" if not actual_nrfi else "NRFI"

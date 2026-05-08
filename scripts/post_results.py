@@ -146,6 +146,8 @@ def post_results(target_date: str | None = None) -> None:
         for game, feat, p_market in resolved:
             if p_market < _YRFI_SIGNAL_THRESHOLD:
                 continue
+            if feat.is_dome == 1.0:
+                continue
             actual_nrfi = bool(feat.nrfi_label)
             won_yrfi = not actual_nrfi  # we bet YRFI, win when run scores
             result_icon = "✅" if won_yrfi else "❌"
@@ -190,7 +192,7 @@ def post_results(target_date: str | None = None) -> None:
                 if edge >= _VALUE_PLAY_THRESHOLD:
                     season_val_w += int(won)
                     season_val_l += int(not won)
-            if p_market >= _YRFI_SIGNAL_THRESHOLD:
+            if p_market >= _YRFI_SIGNAL_THRESHOLD and feat.is_dome != 1.0:
                 won_yrfi = not bool(feat.nrfi_label)
                 season_yrfi_w += int(won_yrfi)
                 season_yrfi_l += int(not won_yrfi)
@@ -253,7 +255,7 @@ def post_results(target_date: str | None = None) -> None:
                 "inline": False,
             },
         ],
-        "footer": {"text": f"YRFI Signal: historically +36–54% ROI when market implies ≥{yrfi_threshold_str} NRFI. Bet YRFI at the posted over line."},
+        "footer": {"text": f"YRFI Signal: historically +45% ROI (971 bets, open parks only) when market implies ≥{yrfi_threshold_str} NRFI. Dome games excluded. Bet YRFI at the posted over line."},
     }
     embeds.append(yrfi_signal_embed)
 

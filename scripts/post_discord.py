@@ -126,13 +126,18 @@ def _is_early_season(target_date_str: str) -> bool:
         return False
 
 
-def _edge_color(edge: float | None, market: float | None = None, target_date: str | None = None) -> int:
+def _edge_color(
+    edge: float | None,
+    market: float | None = None,
+    target_date: str | None = None,
+    is_dome: float | None = None,
+) -> int:
     if edge is None:
         return _COLOR_GRAY
     if abs(edge) < _EDGE_ZERO_THRESHOLD:
         return _COLOR_GRAY
-    # YRFI signal always blue regardless of model edge or season
-    if market is not None and market >= 0.60:
+    # YRFI signal always blue — but not in dome parks (controlled environment, signal +21% vs +48%)
+    if market is not None and market >= 0.60 and is_dome != 1.0:
         return _COLOR_BLUE
     # Early season: all model picks are gray (informational only)
     if target_date and _is_early_season(target_date):
@@ -181,6 +186,8 @@ def _recommendation(
     target_date: str | None = None,
     home_hold: float | None = None,
     away_hold: float | None = None,
+    is_dome: float | None = None,
+    ump_nrfi_above: float | None = None,
 ) -> str:
     """Concise read on the model lean. Model picks are experimental; YRFI signal is market-driven."""
     edge_pct = f"{abs(edge) * 100:.0f}%"
@@ -188,12 +195,25 @@ def _recommendation(
     if abs(edge) < _EDGE_ZERO_THRESHOLD:
         return "⚪ **No model edge** — anchored to market (rolling stats not yet populated)"
 
-    # YRFI signal: always active, always confident framing
-    if market is not None and market >= 0.60:
+    # YRFI signal: always active, always confident framing — excludes dome parks
+    if market is not None and market >= 0.60 and is_dome != 1.0:
+        edge_pct_mkt = f"{market * 100:.0f}%"
+        # Ump note: when ump historically favors low-scoring 1st innings, market tends to
+        # double-count the effect — actual NRFI drops to ~52% while market prices ~67%
+        ump_note = ""
+        if ump_nrfi_above is not None and ump_nrfi_above > 0.01:
+            ump_note = " K-heavy ump — market appears to compound this with the matchup (+60% ROI historically on this combo)."
+        return (
+            f"🔵 **YRFI signal** — market prices NRFI at {edge_pct_mkt} but heavy favorites "
+            f"go NRFI only ~55% historically (+45% ROI, 971 real-odds bets 2023–24).{ump_note}"
+        )
+
+    # Dome park with high market NRFI — not a YRFI signal (dome conditions reduce edge)
+    if market is not None and market >= 0.60 and is_dome == 1.0:
         edge_pct_mkt = f"{market * 100:.0f}%"
         return (
-            f"🔵 **YRFI signal** — market prices NRFI at {edge_pct_mkt} but historically "
-            f"heavy favorites go NRFI only ~48–54%. +46–54% ROI over 2,700 bets (2023–24)."
+            f"⚪ **Dome — YRFI signal excluded** — market at {edge_pct_mkt} NRFI but dome parks "
+            f"show only +21% ROI on this signal vs +48% in open parks."
         )
 
     # Early season: use prior-year hold rates as signal while rolling stats are unpopulated
@@ -359,6 +379,8 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     game_time_str = _fmt_game_time(pred.get("game_time"))
     home_hold = pred.get("home_sp_hold_rate")
     away_hold = pred.get("away_sp_hold_rate")
+    is_dome = pred.get("is_dome")
+    ump_nrfi_above = pred.get("ump_nrfi_rate_above_avg")
     away_blank = pred.get("away_team_blank_rate")  # (blanks, total) or None
     home_blank = pred.get("home_team_blank_rate")
 
@@ -398,7 +420,7 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     if model is not None and market is not None and edge is not None:
         sign = "+" if edge >= 0 else ""
         data_line = f"Model {model * 100:.1f}% · Mkt {market * 100:.1f}% · Edge {sign}{edge * 100:.1f}%"
-        rec = _recommendation(edge, model, market, target_date, home_hold, away_hold)
+        rec = _recommendation(edge, model, market, target_date, home_hold, away_hold, is_dome=is_dome, ump_nrfi_above=ump_nrfi_above)
         description = f"{pitchers_line}{records_line}{offense_line}{odds_line}{data_line}\n{rec}"
     elif model is not None:
         nrfi_pct = f"{model * 100:.0f}%"
@@ -412,7 +434,7 @@ def _build_game_embed(pred: dict[str, Any]) -> dict:
     embed: dict[str, Any] = {
         "title": title,
         "description": description,
-        "color": _edge_color(edge, market, target_date),
+        "color": _edge_color(edge, market, target_date, is_dome=is_dome),
     }
 
     logo_url = _team_logo_url(home)
@@ -428,7 +450,9 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
 
     yrfi_signals = sum(
         1 for p in preds
-        if p.get("p_nrfi_market") is not None and p["p_nrfi_market"] >= 0.60
+        if p.get("p_nrfi_market") is not None
+        and p["p_nrfi_market"] >= 0.60
+        and p.get("is_dome") != 1.0
     )
     model_leans = sum(
         1 for p in preds
@@ -465,7 +489,7 @@ def _build_header_embed(target_date: str, preds: list[dict[str, Any]]) -> dict:
         "title": f"NRFI Picks — {target_date}",
         "description": description,
         "color": _COLOR_BLUE,
-        "footer": {"text": "Model% = predicted NRFI probability. Mkt% = sportsbook implied probability. Edge = model vs market gap. 🔵 YRFI signals are market-driven (+46–54% ROI historically). Model leans active after May 1."},
+        "footer": {"text": "Model% = predicted NRFI probability. Mkt% = sportsbook implied probability. Edge = model vs market gap. 🔵 YRFI signals are market-driven (+45% ROI, open parks only). Model leans active after May 1."},
     }
 
 
@@ -555,6 +579,8 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
                 if feat is not None:
                     pred["home_sp_hold_rate"] = feat.home_sp_hold_rate
                     pred["away_sp_hold_rate"] = feat.away_sp_hold_rate
+                    pred["is_dome"] = feat.is_dome
+                    pred["ump_nrfi_rate_above_avg"] = feat.ump_nrfi_rate_above_avg
                 # Current-season team blank rates (scored 0 in 1st)
                 pred["away_team_blank_rate"] = team_blank_rates.get(game.away_team)
                 pred["home_team_blank_rate"] = team_blank_rates.get(game.home_team)
@@ -570,8 +596,8 @@ def post_predictions(target_date: str | None = None, webhook_url: str | None = N
         def _tier(p: dict) -> int:
             edge = p.get("edge")
             market = p.get("p_nrfi_market")
-            # YRFI signal always first — confirmed edge
-            if market is not None and market >= 0.60:
+            # YRFI signal first — but not for dome parks
+            if market is not None and market >= 0.60 and p.get("is_dome") != 1.0:
                 return 0
             if edge is None or abs(edge) < _EDGE_ZERO_THRESHOLD:
                 return 5  # no lines / anchored

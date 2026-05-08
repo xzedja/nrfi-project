@@ -69,9 +69,9 @@ def _fmt_time(utc_str: str | None, tz: ZoneInfo) -> str | None:
         return None
 
 
-def _signal(p_market: float | None, edge: float | None) -> str:
-    # YRFI signal is purely market-driven — fires without a model prediction
-    if p_market is not None and p_market >= _YRFI_THRESH:
+def _signal(p_market: float | None, edge: float | None, is_dome: float | None = None) -> str:
+    # YRFI signal is purely market-driven — excludes dome parks (signal +21% ROI in domes vs +48% open)
+    if p_market is not None and p_market >= _YRFI_THRESH and is_dome != 1.0:
         return "yrfi_signal"
     if p_market is None or edge is None or abs(edge) < _EDGE_ZERO:
         return "no_edge"
@@ -381,7 +381,7 @@ def dashboard_today(
             if feat.p_nrfi_model is not None and feat.p_nrfi_market is not None
             else None
         )
-        sig = _signal(feat.p_nrfi_market, edge)
+        sig = _signal(feat.p_nrfi_market, edge, feat.is_dome)
         is_yrfi_sig = sig in ("yrfi_signal", "yrfi_slight", "yrfi_lean")
 
         bookmakers = sorted(
@@ -480,7 +480,7 @@ def _year_stats(db: Session, year: int) -> YearStats:
             else:
                 model_losses += 1
 
-        if feat.p_nrfi_market >= _YRFI_THRESH:
+        if feat.p_nrfi_market >= _YRFI_THRESH and feat.is_dome != 1.0:
             if not actual_nrfi:
                 yrfi_wins += 1
             else:
@@ -519,7 +519,7 @@ def simulator_data(
             if feat.p_nrfi_model is not None
             else None
         )
-        sig = _signal(feat.p_nrfi_market, edge)
+        sig = _signal(feat.p_nrfi_market, edge, feat.is_dome)
         result.append(SimulatorEntry(
             date=str(game.game_date),
             signal=sig,
