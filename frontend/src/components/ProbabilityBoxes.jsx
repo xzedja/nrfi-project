@@ -13,21 +13,33 @@ function edgeColorClass(edge) {
 const labelCls = 'text-[10px] uppercase tracking-widest text-violet-400/60 dark:text-violet-400/40 mb-1'
 const subCls   = 'text-[10px] text-violet-400/40 dark:text-violet-400/30 mt-0.5'
 
-function VariantPill({ label, p, pMarket, color }) {
+function VariantRow({ label, p, pMarket }) {
   if (p == null) return null
   const varEdge = pMarket != null ? p - pMarket : null
+  const isLean  = varEdge != null && varEdge > 0
+  const isFade  = varEdge != null && varEdge < 0
+
   return (
-    <div className="flex items-center gap-1.5">
-      <span className={`text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${color}`}>
+    <div className="flex items-center gap-2">
+      <span className="text-[9px] font-bold uppercase tracking-widest w-3 text-violet-400/50">
         {label}
       </span>
-      <span className="text-[11px] font-mono font-semibold text-slate-400 tabular-nums">
+      <span className="text-[11px] font-mono font-semibold text-slate-300 tabular-nums w-8">
         {pct(p)}
       </span>
-      {varEdge != null && (
-        <span className={`text-[10px] font-mono tabular-nums ${edgeColorClass(varEdge)}`}>
-          {fmtEdge(varEdge)}
-        </span>
+      {varEdge != null ? (
+        <>
+          <span className={`text-[10px] font-mono tabular-nums w-9 ${edgeColorClass(varEdge)}`}>
+            {fmtEdge(varEdge)}
+          </span>
+          <span className={`text-[9px] font-bold uppercase tracking-wider ${
+            isLean ? 'text-emerald-400/80' : isFade ? 'text-red-400/80' : 'text-slate-600'
+          }`}>
+            {isLean ? 'LEAN' : isFade ? 'FADE' : '—'}
+          </span>
+        </>
+      ) : (
+        <span className="text-[10px] text-slate-600">—</span>
       )}
     </div>
   )
@@ -36,6 +48,24 @@ function VariantPill({ label, p, pMarket, color }) {
 export default function ProbabilityBoxes({ pModel, pMarket, edge, signal, isHighDisagreement, varA, varB }) {
   const sig = getSignal(signal)
   const hasVariants = varA != null || varB != null
+
+  const varAEdge = varA != null && pMarket != null ? varA - pMarket : null
+  const varBEdge = varB != null && pMarket != null ? varB - pMarket : null
+
+  // Consensus: count models that have positive edge (lean NRFI)
+  let consensusCount = null
+  if (hasVariants && pMarket != null) {
+    const baseLean = edge != null && edge > 0
+    const aLean    = varAEdge != null && varAEdge > 0
+    const bLean    = varBEdge != null && varBEdge > 0
+    const total    = 1 + (varA != null ? 1 : 0) + (varB != null ? 1 : 0)
+    const leanCount = [baseLean, varA != null && aLean, varB != null && bLean].filter(Boolean).length
+    consensusCount = { lean: leanCount, total }
+  }
+
+  const allAgree    = consensusCount && consensusCount.lean === consensusCount.total
+  const noneAgree   = consensusCount && consensusCount.lean === 0
+  const isSplit     = consensusCount && !allAgree && !noneAgree
 
   return (
     <div className="px-4 py-4">
@@ -87,24 +117,31 @@ export default function ProbabilityBoxes({ pModel, pMarket, edge, signal, isHigh
         <span>100%</span>
       </div>
 
-      {/* Variant comparison row */}
+      {/* Variant rows */}
       {hasVariants && (
         <div className="mt-2.5 pt-2 border-t border-violet-100/60 dark:border-violet-500/[0.08]">
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-[9px] uppercase tracking-widest text-violet-400/40 shrink-0">Variants</span>
-            <VariantPill
-              label="A"
-              p={varA}
-              pMarket={pMarket}
-              color="text-emerald-400/70 bg-emerald-500/[0.08] ring-1 ring-emerald-500/15"
-            />
-            <VariantPill
-              label="B"
-              p={varB}
-              pMarket={pMarket}
-              color="text-amber-400/70 bg-amber-500/[0.08] ring-1 ring-amber-500/15"
-            />
+          <p className="text-[9px] uppercase tracking-widest text-violet-400/40 mb-1.5">Variants</p>
+          <div className="space-y-1">
+            <VariantRow label="A" p={varA} pMarket={pMarket} />
+            <VariantRow label="B" p={varB} pMarket={pMarket} />
           </div>
+
+          {consensusCount && (
+            <div className={`mt-1.5 text-[10px] font-semibold flex items-center gap-1 ${
+              allAgree  ? 'text-emerald-400/70' :
+              noneAgree ? 'text-orange-400/70' :
+              'text-amber-400/60'
+            }`}>
+              <span>{allAgree ? '✓' : '⚠'}</span>
+              <span>
+                {allAgree
+                  ? `All ${consensusCount.total} lean NRFI`
+                  : noneAgree
+                  ? 'All models lean YRFI'
+                  : `${consensusCount.lean}/${consensusCount.total} lean NRFI`}
+              </span>
+            </div>
+          )}
         </div>
       )}
 

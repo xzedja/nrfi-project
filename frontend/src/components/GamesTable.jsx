@@ -77,6 +77,7 @@ export default function GamesTable({ games, onSelect }) {
               <th className="px-4 py-3 text-center hidden sm:table-cell">Pitchers</th>
               <th className="px-4 py-3 text-center">Model / Mkt</th>
               <th className="px-4 py-3 text-center">Edge</th>
+              <th className="px-4 py-3 text-center hidden lg:table-cell">Variants</th>
               <th className="px-4 py-3 text-center hidden sm:table-cell">Result</th>
               <th className="px-4 py-3 text-center hidden md:table-cell">Best Lines</th>
               <th className="w-6" />
@@ -145,6 +146,36 @@ export default function GamesTable({ games, onSelect }) {
                   {/* Edge */}
                   <td className="px-4 py-3 text-center">
                     <EdgeCell edge={game.edge} signal={game.signal} />
+                  </td>
+
+                  {/* Variants */}
+                  <td className="px-4 py-3 text-center hidden lg:table-cell">
+                    {(game.p_nrfi_var_a != null || game.p_nrfi_var_b != null) && game.p_nrfi_market != null ? (
+                      <div className="flex flex-col items-center gap-0.5">
+                        {game.p_nrfi_var_a != null && (
+                          <span className={`text-[11px] font-mono tabular-nums ${
+                            game.p_nrfi_var_a - game.p_nrfi_market >= 0.05 ? 'text-emerald-400' :
+                            game.p_nrfi_var_a - game.p_nrfi_market >= 0.02 ? 'text-amber-400' :
+                            game.p_nrfi_var_a - game.p_nrfi_market > 0     ? 'text-amber-500/70' :
+                            game.p_nrfi_var_a - game.p_nrfi_market <= -0.05 ? 'text-red-400' :
+                            game.p_nrfi_var_a - game.p_nrfi_market <= -0.02 ? 'text-orange-400' :
+                            'text-orange-500/70'
+                          }`}>A {fmtEdge(game.p_nrfi_var_a - game.p_nrfi_market)}</span>
+                        )}
+                        {game.p_nrfi_var_b != null && (
+                          <span className={`text-[11px] font-mono tabular-nums ${
+                            game.p_nrfi_var_b - game.p_nrfi_market >= 0.05 ? 'text-emerald-400' :
+                            game.p_nrfi_var_b - game.p_nrfi_market >= 0.02 ? 'text-amber-400' :
+                            game.p_nrfi_var_b - game.p_nrfi_market > 0     ? 'text-amber-500/70' :
+                            game.p_nrfi_var_b - game.p_nrfi_market <= -0.05 ? 'text-red-400' :
+                            game.p_nrfi_var_b - game.p_nrfi_market <= -0.02 ? 'text-orange-400' :
+                            'text-orange-500/70'
+                          }`}>B {fmtEdge(game.p_nrfi_var_b - game.p_nrfi_market)}</span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-slate-600">—</span>
+                    )}
                   </td>
 
                   {/* Result */}

@@ -50,7 +50,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from typing import Any
 from xgboost import XGBClassifier
 
 sys.path.insert(0, ".")
@@ -102,61 +101,40 @@ FEATURE_COLS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Variant weight configurations
-# Each dict maps feature column → scale multiplier applied before imputation.
-# Empty dict = baseline (no scaling). Weights are baked into the model pkl
-# via FeatureWeightTransformer so inference is automatic.
+# Variant configurations
+# Weights are no longer used for differentiation — XGBoost is scale-invariant.
+# Feature subsetting is the mechanism: each variant trains on a different
+# subset of FEATURE_COLS, forcing genuinely different decision logic.
 # ---------------------------------------------------------------------------
 VARIANT_WEIGHTS: dict[str, dict[str, float]] = {
     "baseline": {},
-    # Variant A — First-Inning Specialist
-    # Amplify first-inning Statcast, in-season NRFI rates, and first-inn ERA.
-    # De-emphasize general rolling ERA/WHIP (already partially captured above).
-    "var_a": {
-        "home_sp_first_inn_k_pct":    2.0,
-        "home_sp_first_inn_bb_pct":   2.0,
-        "home_sp_first_inn_hard_pct": 2.0,
-        "away_sp_first_inn_k_pct":    2.0,
-        "away_sp_first_inn_bb_pct":   2.0,
-        "away_sp_first_inn_hard_pct": 2.0,
-        "home_sp_first_inn_era":      2.0,
-        "away_sp_first_inn_era":      2.0,
-        "home_sp_nrfi_rate_season":   2.0,
-        "away_sp_nrfi_rate_season":   2.0,
-        "home_sp_last5_era":          0.5,
-        "home_sp_last5_whip":         0.5,
-        "away_sp_last5_era":          0.5,
-        "away_sp_last5_whip":         0.5,
-    },
-    # Variant B — Team Offense + Recent Form
-    # Amplify rolling team NRFI rates and first-inning run rates.
-    # De-emphasize all pitcher form features.
-    "var_b": {
-        "home_team_nrfi_rate_l30":           3.0,
-        "away_team_nrfi_rate_l30":           3.0,
-        "home_team_first_inn_runs_per_game": 2.0,
-        "away_team_first_inn_runs_per_game": 2.0,
-        "home_sp_last5_era":          0.5,
-        "home_sp_last5_whip":         0.5,
-        "away_sp_last5_era":          0.5,
-        "away_sp_last5_whip":         0.5,
-        "home_sp_first_inn_era":      0.5,
-        "away_sp_first_inn_era":      0.5,
-        "home_sp_avg_velo":           0.5,
-        "home_sp_velo_trend":         0.5,
-        "away_sp_avg_velo":           0.5,
-        "away_sp_velo_trend":         0.5,
-        "home_sp_days_rest":          0.5,
-        "away_sp_days_rest":          0.5,
-        "home_sp_first_inn_k_pct":    0.5,
-        "home_sp_first_inn_bb_pct":   0.5,
-        "home_sp_first_inn_hard_pct": 0.5,
-        "away_sp_first_inn_k_pct":    0.5,
-        "away_sp_first_inn_bb_pct":   0.5,
-        "away_sp_first_inn_hard_pct": 0.5,
-        "home_sp_hold_rate":          0.5,
-        "away_sp_hold_rate":          0.5,
-    },
+    "var_a": {},
+    "var_b": {},
+}
+
+VARIANT_FEATURES: dict[str, list[str] | None] = {
+    "baseline": None,  # uses all 26 FEATURE_COLS
+
+    # Var A — Pitcher Form: what is this pitcher doing in the 1st inning THIS SEASON?
+    # Ignores team offensive trends entirely.
+    "var_a": [
+        "home_sp_first_inn_k_pct",    "home_sp_first_inn_bb_pct",  "home_sp_first_inn_hard_pct",
+        "away_sp_first_inn_k_pct",    "away_sp_first_inn_bb_pct",  "away_sp_first_inn_hard_pct",
+        "home_sp_first_inn_era",      "away_sp_first_inn_era",
+        "home_sp_nrfi_rate_season",   "away_sp_nrfi_rate_season",
+        "home_sp_hold_rate",          "away_sp_hold_rate",
+        "home_sp_avg_velo",           "away_sp_avg_velo",
+        "home_sp_days_rest",          "away_sp_days_rest",
+    ],  # 16 pitcher-focused features
+
+    # Var B — Team + Context: what patterns do these teams show in the 1st inning lately?
+    # Minimal pitcher detail — just general season-level ERA/WHIP as context.
+    "var_b": [
+        "home_team_first_inn_runs_per_game", "away_team_first_inn_runs_per_game",
+        "home_team_nrfi_rate_l30",           "away_team_nrfi_rate_l30",
+        "home_sp_last5_era",                 "away_sp_last5_era",
+        "home_sp_last5_whip",                "away_sp_last5_whip",
+    ],  # 8 features: 4 team + 4 general recent pitcher form
 }
 
 _VARIANT_PATHS: dict[str, str] = {
@@ -323,6 +301,7 @@ def train(
     y_test  = test_df["nrfi_label"].astype(int)
 
     weights = VARIANT_WEIGHTS.get(variant, {})
+    features = VARIANT_FEATURES.get(variant)  # None = use all FEATURE_COLS
 
     # -----------------------------------------------------------------------
     # Baseline: run LR vs XGB comparison and save the winner
@@ -342,10 +321,11 @@ def train(
             logger.info("  %-45s  %+.4f", feat, coef)
 
     # -----------------------------------------------------------------------
-    # XGBoost (with variant weights baked in for non-baseline)
+    # XGBoost (feature subsetting baked in for non-baseline variants)
     # -----------------------------------------------------------------------
-    logger.info("--- XGBoost [variant=%s] ---", variant)
-    xgb_model = XGBModel(variant_weights=weights)
+    active_features = features if features is not None else FEATURE_COLS
+    logger.info("--- XGBoost [variant=%s, features=%d] ---", variant, len(active_features))
+    xgb_model = XGBModel(variant_weights=weights, variant_features=features)
     xgb_model.fit(X_fit, y_fit, X_val=X_calib, y_val=y_calib)
     evaluate("XGB Fit  ", xgb_model, X_fit,   y_fit)
     evaluate("XGB Calib", xgb_model, X_calib, y_calib)
@@ -354,7 +334,7 @@ def train(
 
     importances = xgb_model.clf_.feature_importances_
     logger.info("XGBoost feature importances (gain):")
-    for feat, imp in sorted(zip(FEATURE_COLS, importances), key=lambda x: -x[1]):
+    for feat, imp in sorted(zip(active_features, importances), key=lambda x: -x[1]):
         logger.info("  %-45s  %.4f", feat, imp)
 
     # -----------------------------------------------------------------------
@@ -390,7 +370,7 @@ def train(
     meta = {
         "trained_at": datetime.now().isoformat(),
         "variant": variant,
-        "variant_weights": weights,
+        "variant_features": features,
         "winner": winner_name,
         "val_window_days": _VAL_WINDOW_DAYS,
         "calib_window_days": _CALIB_WINDOW_DAYS,

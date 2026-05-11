@@ -57,6 +57,38 @@ function ResultStrip({ game }) {
   return <span className="text-[11px] font-mono text-slate-500 tabular-nums shrink-0">{timeStr}</span>
 }
 
+const _NRFI_SIG = new Set(['nrfi_strong', 'nrfi_lean'])
+const _YRFI_SIG = new Set(['yrfi_signal', 'yrfi_slight', 'yrfi_lean'])
+
+function ConsensusBadge({ game }) {
+  const { p_nrfi_model, p_nrfi_market, p_nrfi_var_a, p_nrfi_var_b, edge, signal } = game
+  if (p_nrfi_market == null) return null
+  if (p_nrfi_var_a == null && p_nrfi_var_b == null) return null
+  if (!_NRFI_SIG.has(signal) && !_YRFI_SIG.has(signal)) return null
+
+  const isNrfi = _NRFI_SIG.has(signal)
+  // For NRFI signals: positive edge = agrees. For YRFI: negative edge = agrees.
+  const agrees = (e) => e != null && (isNrfi ? e > 0 : e < 0)
+
+  const baseAgrees = agrees(edge)
+  const varAEdge   = p_nrfi_var_a != null ? p_nrfi_var_a - p_nrfi_market : null
+  const varBEdge   = p_nrfi_var_b != null ? p_nrfi_var_b - p_nrfi_market : null
+  const count = [baseAgrees, p_nrfi_var_a != null && agrees(varAEdge), p_nrfi_var_b != null && agrees(varBEdge)].filter(Boolean).length
+  const total = 1 + (p_nrfi_var_a != null ? 1 : 0) + (p_nrfi_var_b != null ? 1 : 0)
+
+  if (count === 0 || count === 1) return null  // minority — not worth showing
+
+  const cls = count === total
+    ? 'text-emerald-400 bg-emerald-500/[0.10] ring-1 ring-emerald-500/20'
+    : 'text-amber-400 bg-amber-500/[0.10] ring-1 ring-amber-500/20'
+
+  return (
+    <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded shrink-0 ${cls}`}>
+      {count}/{total}
+    </span>
+  )
+}
+
 export default function GameCard({ game }) {
   const sig = getSignal(game.signal)
 
@@ -74,11 +106,14 @@ export default function GameCard({ game }) {
       shadow-sm dark:shadow-[0_4px_32px_rgba(109,40,217,0.08)]
     `}>
 
-      {/* ── Top strip: badge + result/time ── */}
+      {/* ── Top strip: badge + consensus + result/time ── */}
       <div className="px-4 pt-3.5 pb-3 flex items-center justify-between gap-3">
-        <span className={`text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-md ${sig.badge}`}>
-          {sig.label}
-        </span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-md shrink-0 ${sig.badge}`}>
+            {sig.label}
+          </span>
+          <ConsensusBadge game={game} />
+        </div>
         <ResultStrip game={game} />
       </div>
 

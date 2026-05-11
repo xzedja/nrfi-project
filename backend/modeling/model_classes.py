@@ -102,17 +102,29 @@ class XGBModel(BaseEstimator, ClassifierMixin):
     Kept separate from Pipeline so we can pass a validation eval_set for early
     stopping — something Pipeline makes awkward.
 
-    variant_weights: per-feature scale factors applied before imputation. Empty
-      dict (default) = baseline behaviour, identical to the old pkl format.
-      Old pkls without weight_transformer_ are handled gracefully via getattr.
+    variant_weights:   per-feature scale factors applied before imputation.
+    variant_features:  if set, only these columns are used (feature subsetting).
+      Both are baked into the pkl so inference is automatic with no external state.
+      Old pkls without these attrs load gracefully via getattr defaults.
     """
 
-    def __init__(self, variant_weights: dict[str, float] | None = None) -> None:
+    def __init__(
+        self,
+        variant_weights: dict[str, float] | None = None,
+        variant_features: list[str] | None = None,
+    ) -> None:
         self.variant_weights = variant_weights or {}
+        self.variant_features = variant_features  # None = use all columns passed
         self.weight_transformer_: FeatureWeightTransformer | None = None
         self.imputer_: SeasonStartImputer | None = None
         self.clf_: XGBClassifier | None = None
         self.classes_ = np.array([0, 1])
+
+    def _select_features(self, X: pd.DataFrame) -> pd.DataFrame:
+        vf = getattr(self, "variant_features", None)
+        if vf:
+            return X[[c for c in vf if c in X.columns]]
+        return X
 
     def fit(
         self,
@@ -121,6 +133,10 @@ class XGBModel(BaseEstimator, ClassifierMixin):
         X_val: pd.DataFrame | None = None,
         y_val: pd.Series | None = None,
     ) -> "XGBModel":
+        X = self._select_features(X)
+        if X_val is not None:
+            X_val = self._select_features(X_val)
+
         self.weight_transformer_ = FeatureWeightTransformer(self.variant_weights)
         X_w = self.weight_transformer_.fit_transform(X)
 
@@ -153,6 +169,7 @@ class XGBModel(BaseEstimator, ClassifierMixin):
         return self
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        X = self._select_features(X)
         wt = getattr(self, "weight_transformer_", None)
         X_w = wt.transform(X) if wt is not None else X
         X_imp = self.imputer_.transform(X_w)
