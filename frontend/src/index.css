@@ -11,7 +11,6 @@ body {
   font-family: 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
 }
 
-/* Subtle scrollbar in dark mode */
 @layer base {
   :root {
     --card-bg: #ffffff;
@@ -24,11 +23,53 @@ body {
 }
 
 /* Purple-tinted scrollbar */
-::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.18); }
-::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.30); }
-
-/* Thin scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 99px; }
+::-webkit-scrollbar         { width: 6px; height: 6px; }
+::-webkit-scrollbar-track   { background: transparent; }
+::-webkit-scrollbar-thumb   { background: rgba(148,163,184,0.2); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.35); }
+
+/* ── Gauge fill animation ── */
+@keyframes gauge-fill {
+  from { width: 0% }
+}
+.animate-gauge {
+  animation: gauge-fill 0.9s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* ── Sparkline stroke draw animation ── */
+@keyframes draw-line {
+  from { stroke-dashoffset: 1; }
+  to   { stroke-dashoffset: 0; }
+}
+.animate-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw-line 1.2s ease-out forwards;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ── Shimmer overlay (used on BestPickBanner) ── */
+.shimmer-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgba(255,255,255,0.04) 50%,
+    transparent 70%
+  );
+  animation: shimmer 2.8s ease-in-out infinite;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* ── Card hover glow (dark mode) ── */
+.card-hover {
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+}
+.dark .card-hover:hover {
+  box-shadow: 0 12px 40px rgba(109, 40, 217, 0.14), 0 2px 8px rgba(109, 40, 217, 0.08);
+}

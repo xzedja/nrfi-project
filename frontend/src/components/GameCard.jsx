@@ -31,7 +31,7 @@ function ResultStrip({ game }) {
     return (
       <div className="flex items-center gap-2 shrink-0">
         {outcome && (
-          <span className={`text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-md ${
+          <span className={`animate-scale-in text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-md ${
             outcome === 'WIN'
               ? 'bg-emerald-500/[0.12] text-emerald-400 ring-1 ring-emerald-500/25'
               : 'bg-red-500/[0.12] text-red-400 ring-1 ring-red-500/25'
@@ -99,7 +99,7 @@ export default function GameCard({ game }) {
 
   return (
     <div className={`
-      rounded-xl overflow-hidden flex flex-col
+      card-hover rounded-xl overflow-hidden flex flex-col
       bg-white dark:bg-[#100e22]
       border border-violet-200 dark:border-violet-500/[0.12]
       border-l-4 ${sig.leftBar}

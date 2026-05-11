@@ -69,6 +69,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#faf8ff] dark:bg-[#090712] text-gray-900 dark:text-slate-100 transition-colors">
+
+      {/* Ambient background blobs — dark mode only */}
+      <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden opacity-0 dark:opacity-100" aria-hidden>
+        <div className="absolute -top-48 -left-24 w-[700px] h-[700px] rounded-full bg-violet-600/[0.038] blur-[130px] animate-float-slow" />
+        <div className="absolute top-1/3 -right-36 w-[580px] h-[580px] rounded-full bg-indigo-500/[0.028] blur-[120px] animate-float-med" />
+        <div className="absolute -bottom-32 left-1/3 w-[480px] h-[480px] rounded-full bg-violet-800/[0.025] blur-[110px] animate-float-fast" />
+      </div>
+
       <Header
         lastUpdated={lastUpdated}
         onRefresh={refresh}
@@ -78,8 +86,10 @@ export default function App() {
         setViewMode={setViewMode}
       />
 
-      <main className="max-w-7xl mx-auto px-4 py-6">
+      <main className="relative z-10 max-w-7xl mx-auto px-4 py-6">
         <NavTabs active={activeView} setActive={setActiveView} />
+
+        <div key={activeView} className="animate-fade-in-up">
 
         {/* ── Today ── */}
         {activeView === 'today' && (
@@ -146,6 +156,8 @@ export default function App() {
 
         {/* ── Scorecard ── */}
         {activeView === 'scorecard' && <ScorecardView />}
+
+        </div>
       </main>
 
       {selectedGame && (

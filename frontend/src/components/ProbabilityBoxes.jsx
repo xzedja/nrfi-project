@@ -100,13 +100,13 @@ export default function ProbabilityBoxes({ pModel, pMarket, edge, signal, isHigh
       <div className="relative h-1.5 bg-violet-100 dark:bg-violet-950/60 rounded-full overflow-hidden">
         {pMarket != null && (
           <div
-            className="absolute left-0 top-0 h-full bg-violet-300/50 dark:bg-violet-700/40 rounded-full transition-all"
+            className="animate-gauge absolute left-0 top-0 h-full bg-violet-300/50 dark:bg-violet-700/40 rounded-full"
             style={{ width: `${Math.min(pMarket * 100, 100)}%` }}
           />
         )}
         {pModel != null && (
           <div
-            className={`absolute top-0 h-full w-0.5 ${sig.gaugeColor} transition-all`}
+            className={`animate-gauge absolute top-0 h-full w-0.5 ${sig.gaugeColor}`}
             style={{ left: `calc(${Math.min(pModel * 100, 100)}% - 1px)` }}
           />
         )}

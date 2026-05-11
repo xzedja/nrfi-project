@@ -33,12 +33,15 @@ export default function BestPickBanner({ games }) {
 
   return (
     <div className={`
-      mb-5 rounded-xl overflow-hidden
+      card-hover mb-5 rounded-xl overflow-hidden relative
       bg-white dark:bg-[#100e22]
       border border-violet-200 dark:border-violet-500/[0.12]
       border-l-4 ${sig.leftBar}
-      shadow-sm dark:shadow-[0_4px_32px_rgba(109,40,217,0.10)]
+      shadow-sm dark:shadow-[0_4px_48px_rgba(109,40,217,0.13)]
     `}>
+      {/* Shimmer sweep — dark mode only */}
+      <div className="hidden dark:block shimmer-sweep" />
+
       {/* Header strip */}
       <div className="px-5 pt-3.5 pb-3 flex items-center gap-3 border-b border-violet-100 dark:border-violet-500/[0.08]">
         <span className="text-[10px] uppercase tracking-widest font-semibold text-violet-400/50 shrink-0">

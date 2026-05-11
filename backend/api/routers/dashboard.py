@@ -606,6 +606,60 @@ def _variant_record(db: Session, year: int, p_col: str) -> SignalRecord:
     return _signal_record(wins, losses)
 
 
+class TrendPoint(BaseModel):
+    cumulative_roi: float
+    wins: int
+    losses: int
+
+
+class PickTrendResponse(BaseModel):
+    model_picks: list[TrendPoint]
+    yrfi_signal: list[TrendPoint]
+
+
+@router.get("/pick-trend", response_model=PickTrendResponse)
+def pick_trend(db: Session = Depends(get_db)):
+    """Chronological cumulative ROI for model picks and YRFI signal — current season only."""
+    year = date.today().year
+    rows = (
+        db.query(NrfiFeatures, Game.game_date)
+        .join(Game, NrfiFeatures.game_id == Game.id)
+        .filter(
+            extract("year", Game.game_date) == year,
+            NrfiFeatures.nrfi_label.isnot(None),
+            NrfiFeatures.p_nrfi_model.isnot(None),
+            NrfiFeatures.p_nrfi_market.isnot(None),
+        )
+        .order_by(Game.game_date)
+        .all()
+    )
+
+    model_pts: list[TrendPoint] = []
+    yrfi_pts:  list[TrendPoint] = []
+    mw = ml = yw = yl = 0
+
+    for feat, _ in rows:
+        edge = feat.p_nrfi_model - feat.p_nrfi_market
+        sig  = _signal(feat.p_nrfi_market, edge, feat.is_dome)
+        nrfi = bool(feat.nrfi_label)
+
+        if sig in ("nrfi_strong", "nrfi_lean"):
+            if nrfi: mw += 1
+            else:    ml += 1
+            t   = mw + ml
+            roi = round((mw * 100 - ml * 110) / (t * 110), 4)
+            model_pts.append(TrendPoint(cumulative_roi=roi, wins=mw, losses=ml))
+
+        if sig == "yrfi_signal":
+            if not nrfi: yw += 1
+            else:        yl += 1
+            t   = yw + yl
+            roi = round((yw * 100 - yl * 110) / (t * 110), 4)
+            yrfi_pts.append(TrendPoint(cumulative_roi=roi, wins=yw, losses=yl))
+
+    return PickTrendResponse(model_picks=model_pts, yrfi_signal=yrfi_pts)
+
+
 @router.get("/scorecard", response_model=ScorecardResponse)
 def scorecard(db: Session = Depends(get_db)):
     """Return W-L records for all three model variants (current and prior year)."""
