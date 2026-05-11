@@ -2,6 +2,7 @@ const TABS = [
   { key: 'today',     label: 'Today' },
   { key: 'history',   label: 'History' },
   { key: 'simulator', label: 'Simulator' },
+  { key: 'scorecard', label: 'Scorecard' },
 ]
 
 export default function NavTabs({ active, setActive }) {

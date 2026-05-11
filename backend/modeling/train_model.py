@@ -50,13 +50,19 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from typing import Any
 from xgboost import XGBClassifier
 
 sys.path.insert(0, ".")
 
 from backend.db.models import Game, NrfiFeatures
 from backend.db.session import SessionLocal
-from backend.modeling.model_classes import CalibratedModel, SeasonStartImputer, XGBModel
+from backend.modeling.model_classes import (
+    CalibratedModel,
+    FeatureWeightTransformer,
+    SeasonStartImputer,
+    XGBModel,
+)
 from backend.modeling.model_store import DEFAULT_MODEL_PATH, save_model
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -94,6 +100,70 @@ FEATURE_COLS = [
     "home_team_nrfi_rate_l30",
     "away_team_nrfi_rate_l30",
 ]
+
+# ---------------------------------------------------------------------------
+# Variant weight configurations
+# Each dict maps feature column → scale multiplier applied before imputation.
+# Empty dict = baseline (no scaling). Weights are baked into the model pkl
+# via FeatureWeightTransformer so inference is automatic.
+# ---------------------------------------------------------------------------
+VARIANT_WEIGHTS: dict[str, dict[str, float]] = {
+    "baseline": {},
+    # Variant A — First-Inning Specialist
+    # Amplify first-inning Statcast, in-season NRFI rates, and first-inn ERA.
+    # De-emphasize general rolling ERA/WHIP (already partially captured above).
+    "var_a": {
+        "home_sp_first_inn_k_pct":    2.0,
+        "home_sp_first_inn_bb_pct":   2.0,
+        "home_sp_first_inn_hard_pct": 2.0,
+        "away_sp_first_inn_k_pct":    2.0,
+        "away_sp_first_inn_bb_pct":   2.0,
+        "away_sp_first_inn_hard_pct": 2.0,
+        "home_sp_first_inn_era":      2.0,
+        "away_sp_first_inn_era":      2.0,
+        "home_sp_nrfi_rate_season":   2.0,
+        "away_sp_nrfi_rate_season":   2.0,
+        "home_sp_last5_era":          0.5,
+        "home_sp_last5_whip":         0.5,
+        "away_sp_last5_era":          0.5,
+        "away_sp_last5_whip":         0.5,
+    },
+    # Variant B — Team Offense + Recent Form
+    # Amplify rolling team NRFI rates and first-inning run rates.
+    # De-emphasize all pitcher form features.
+    "var_b": {
+        "home_team_nrfi_rate_l30":           3.0,
+        "away_team_nrfi_rate_l30":           3.0,
+        "home_team_first_inn_runs_per_game": 2.0,
+        "away_team_first_inn_runs_per_game": 2.0,
+        "home_sp_last5_era":          0.5,
+        "home_sp_last5_whip":         0.5,
+        "away_sp_last5_era":          0.5,
+        "away_sp_last5_whip":         0.5,
+        "home_sp_first_inn_era":      0.5,
+        "away_sp_first_inn_era":      0.5,
+        "home_sp_avg_velo":           0.5,
+        "home_sp_velo_trend":         0.5,
+        "away_sp_avg_velo":           0.5,
+        "away_sp_velo_trend":         0.5,
+        "home_sp_days_rest":          0.5,
+        "away_sp_days_rest":          0.5,
+        "home_sp_first_inn_k_pct":    0.5,
+        "home_sp_first_inn_bb_pct":   0.5,
+        "home_sp_first_inn_hard_pct": 0.5,
+        "away_sp_first_inn_k_pct":    0.5,
+        "away_sp_first_inn_bb_pct":   0.5,
+        "away_sp_first_inn_hard_pct": 0.5,
+        "home_sp_hold_rate":          0.5,
+        "away_sp_hold_rate":          0.5,
+    },
+}
+
+_VARIANT_PATHS: dict[str, str] = {
+    "baseline": DEFAULT_MODEL_PATH,
+    "var_a":    "models/nrfi_model_var_a.pkl",
+    "var_b":    "models/nrfi_model_var_b.pkl",
+}
 
 # Earliest season included. 2015+ gives ~50k rows vs ~7k for 2023+.
 # p_nrfi_market is NULL for pre-2023 rows and imputed to median (~0.50) by
@@ -206,26 +276,37 @@ def _build_logistic_pipeline() -> Pipeline:
     ])
 
 
-def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
+def train(
+    output_path: str = DEFAULT_MODEL_PATH,
+    variant: str = "baseline",
+) -> Any:
+    """
+    Train and save a model.
+
+    variant: one of "baseline", "var_a", "var_b".
+      - "baseline": standard training, LR vs XGB comparison, saves winner.
+      - "var_a" / "var_b": XGB only with variant feature weights baked in.
+        Output path defaults to the variant-specific path if not overridden.
+    """
+    if output_path == DEFAULT_MODEL_PATH and variant in _VARIANT_PATHS:
+        output_path = _VARIANT_PATHS[variant]
+
     df = load_feature_dataframe()
-    logger.info("Loaded %d labeled rows from DB", len(df))
+    logger.info("[%s] Loaded %d labeled rows from DB", variant, len(df))
 
     if len(df) < 100:
         raise ValueError("Not enough labeled data to train. Run the backfill first.")
 
-    _audit_nrfi_rates(df)
+    if variant == "baseline":
+        _audit_nrfi_rates(df)
 
     fit_df, calib_df, val_df, test_df = date_based_split(df)
     today = date.today()
     val_cutoff   = today - timedelta(days=_VAL_WINDOW_DAYS)
     calib_cutoff = val_cutoff - timedelta(days=_CALIB_WINDOW_DAYS)
     logger.info(
-        "Split — fit: %d games (through %s)  |  calib: %d games (%s – %s)"
-        "  |  val: %d games (last %d days)  |  test (live): %d",
-        len(fit_df),   calib_cutoff,
-        len(calib_df), calib_cutoff + timedelta(days=1), val_cutoff,
-        len(val_df),   _VAL_WINDOW_DAYS,
-        len(test_df),
+        "[%s] Split — fit: %d  |  calib: %d  |  val: %d  |  test: %d",
+        variant, len(fit_df), len(calib_df), len(val_df), len(test_df),
     )
     if len(calib_df) < 100:
         logger.warning("Calib set has only %d games — Platt scaling may be unstable.", len(calib_df))
@@ -241,27 +322,30 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     X_test  = test_df[FEATURE_COLS]
     y_test  = test_df["nrfi_label"].astype(int)
 
-    # -----------------------------------------------------------------------
-    # Baseline: logistic regression (fit on fit set, evaluate on calib + val)
-    # -----------------------------------------------------------------------
-    logger.info("--- Logistic Regression (baseline) ---")
-    lr_model = _build_logistic_pipeline()
-    lr_model.fit(X_fit, y_fit)
-    evaluate("LR  Fit  ", lr_model, X_fit,   y_fit)
-    evaluate("LR  Calib", lr_model, X_calib, y_calib)
-    lr_val  = evaluate("LR  Val  ", lr_model, X_val,  y_val)
-    evaluate("LR  Test ", lr_model, X_test,  y_test)
-
-    coefs = lr_model.named_steps["clf"].coef_[0]
-    logger.info("LR feature coefficients (positive = increases P(NRFI)):")
-    for feat, coef in sorted(zip(FEATURE_COLS, coefs), key=lambda x: -abs(x[1])):
-        logger.info("  %-45s  %+.4f", feat, coef)
+    weights = VARIANT_WEIGHTS.get(variant, {})
 
     # -----------------------------------------------------------------------
-    # XGBoost with early stopping on calib set
+    # Baseline: run LR vs XGB comparison and save the winner
     # -----------------------------------------------------------------------
-    logger.info("--- XGBoost (early stopping on calib set) ---")
-    xgb_model = XGBModel()
+    if variant == "baseline":
+        logger.info("--- Logistic Regression (baseline) ---")
+        lr_model = _build_logistic_pipeline()
+        lr_model.fit(X_fit, y_fit)
+        evaluate("LR  Fit  ", lr_model, X_fit,   y_fit)
+        evaluate("LR  Calib", lr_model, X_calib, y_calib)
+        lr_val  = evaluate("LR  Val  ", lr_model, X_val,  y_val)
+        evaluate("LR  Test ", lr_model, X_test,  y_test)
+
+        coefs = lr_model.named_steps["clf"].coef_[0]
+        logger.info("LR feature coefficients (positive = increases P(NRFI)):")
+        for feat, coef in sorted(zip(FEATURE_COLS, coefs), key=lambda x: -abs(x[1])):
+            logger.info("  %-45s  %+.4f", feat, coef)
+
+    # -----------------------------------------------------------------------
+    # XGBoost (with variant weights baked in for non-baseline)
+    # -----------------------------------------------------------------------
+    logger.info("--- XGBoost [variant=%s] ---", variant)
+    xgb_model = XGBModel(variant_weights=weights)
     xgb_model.fit(X_fit, y_fit, X_val=X_calib, y_val=y_calib)
     evaluate("XGB Fit  ", xgb_model, X_fit,   y_fit)
     evaluate("XGB Calib", xgb_model, X_calib, y_calib)
@@ -274,31 +358,25 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
         logger.info("  %-45s  %.4f", feat, imp)
 
     # -----------------------------------------------------------------------
-    # Summary comparison (val set — most recent 7 days)
+    # For baseline: compare LR vs XGB and pick winner; variants always use XGB
     # -----------------------------------------------------------------------
-    logger.info("--- Comparison (Val set — last %d days) ---", _VAL_WINDOW_DAYS)
-    logger.info(
-        "  Logistic Regression — AUC: %.4f  |  Brier: %.4f",
-        lr_val["auc"], lr_val["brier"],
-    )
-    logger.info(
-        "  XGBoost             — AUC: %.4f  |  Brier: %.4f",
-        xgb_val["auc"], xgb_val["brier"],
-    )
-
-    # -----------------------------------------------------------------------
-    # Pick winner on val AUC
-    # -----------------------------------------------------------------------
-    if xgb_val["auc"] >= lr_val["auc"]:
-        winner_name, winner = "XGBoost", xgb_model
+    if variant == "baseline":
+        logger.info("--- Comparison (Val set) ---")
+        logger.info("  LR  — AUC: %.4f  |  Brier: %.4f", lr_val["auc"], lr_val["brier"])
+        logger.info("  XGB — AUC: %.4f  |  Brier: %.4f", xgb_val["auc"], xgb_val["brier"])
+        if xgb_val["auc"] >= lr_val["auc"]:
+            winner_name, winner, winner_val = "XGBoost", xgb_model, xgb_val
+        else:
+            winner_name, winner, winner_val = "Logistic Regression", lr_model, lr_val
     else:
-        winner_name, winner = "Logistic Regression", lr_model
-    logger.info("Winner: %s (val AUC %.4f)", winner_name, (xgb_val if winner_name == "XGBoost" else lr_val)["auc"])
+        winner_name, winner, winner_val = "XGBoost", xgb_model, xgb_val
+
+    logger.info("[%s] Winner: %s (val AUC %.4f)", variant, winner_name, winner_val["auc"])
 
     # -----------------------------------------------------------------------
-    # Calibrate winner with Platt scaling on calib set (~900 diverse games)
+    # Platt calibration on calib set
     # -----------------------------------------------------------------------
-    logger.info("Calibrating %s on calib set (%d games)...", winner_name, len(calib_df))
+    logger.info("[%s] Calibrating on calib set (%d games)...", variant, len(calib_df))
     raw_calib_probs = winner.predict_proba(X_calib)[:, 1].reshape(-1, 1)
     platt = _PlattLR(C=1.0, max_iter=1000)
     platt.fit(raw_calib_probs, y_calib)
@@ -307,12 +385,12 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     cal_val   = evaluate("Calibrated Val  ", calibrated, X_val,   y_val)
 
     save_model(calibrated, output_path)
-    logger.info("Saved %s to %s", winner_name, output_path)
+    logger.info("[%s] Saved %s to %s", variant, winner_name, output_path)
 
-    # Write metadata so picks can always be traced to the model version that made them
-    winner_val = xgb_val if winner_name == "XGBoost" else lr_val
     meta = {
         "trained_at": datetime.now().isoformat(),
+        "variant": variant,
+        "variant_weights": weights,
         "winner": winner_name,
         "val_window_days": _VAL_WINDOW_DAYS,
         "calib_window_days": _CALIB_WINDOW_DAYS,
@@ -334,7 +412,7 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
     meta_path = Path(output_path).with_suffix(".meta.json")
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
-    logger.info("Metadata saved to %s", meta_path)
+    logger.info("[%s] Metadata saved to %s", variant, meta_path)
 
     return calibrated
 
@@ -342,8 +420,14 @@ def train(output_path: str = DEFAULT_MODEL_PATH) -> Pipeline:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train NRFI model (XGBoost vs LogReg comparison).")
     parser.add_argument("--output", default=DEFAULT_MODEL_PATH)
+    parser.add_argument(
+        "--variant",
+        default="baseline",
+        choices=list(VARIANT_WEIGHTS.keys()),
+        help="Which variant to train. Non-baseline variants use XGB only with feature weights.",
+    )
     args = parser.parse_args()
-    train(output_path=args.output)
+    train(output_path=args.output, variant=args.variant)
 
 
 if __name__ == "__main__":

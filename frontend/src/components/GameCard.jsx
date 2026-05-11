@@ -124,6 +124,8 @@ export default function GameCard({ game }) {
         edge={game.edge}
         signal={game.signal}
         isHighDisagreement={game.is_high_disagreement}
+        varA={game.p_nrfi_var_a}
+        varB={game.p_nrfi_var_b}
       />
 
       {/* ── Team stats ── */}

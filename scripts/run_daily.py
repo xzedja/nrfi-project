@@ -31,7 +31,7 @@ from backend.data.fetch_lineups import update_lineup_obp_for_date
 from backend.data.fetch_odds import fetch_and_store_odds
 from backend.db.models import Game, GamePitchers, GameUmpire, NrfiFeatures, Pitcher
 from backend.db.session import SessionLocal
-from backend.modeling.predict import predict_for_game
+from backend.modeling.predict import predict_for_game, predict_variants_for_game
 from scripts.post_discord import post_predictions
 from scripts.post_results import post_results
 
@@ -176,7 +176,7 @@ def run_daily(target_date: str | None = None) -> None:
         logger.warning("Odds fetch failed — predictions will have no edge values today.")
 
     # -----------------------------------------------------------------------
-    # Step 5: Store model predictions in nrfi_features
+    # Step 5: Store baseline + variant model predictions in nrfi_features
     # -----------------------------------------------------------------------
     logger.info("Storing model predictions for %s...", target)
     db = SessionLocal()
@@ -188,8 +188,21 @@ def run_daily(target_date: str | None = None) -> None:
             if pred is None:
                 continue
             feat = db.query(NrfiFeatures).filter(NrfiFeatures.game_id == game.id).first()
-            if feat is not None and feat.p_nrfi_model is None:
+            if feat is None:
+                continue
+            updated = False
+            if feat.p_nrfi_model is None:
                 feat.p_nrfi_model = pred["p_nrfi_model"]
+                updated = True
+            # Store variant predictions (overwrite if already set — models retrain weekly)
+            var_preds = predict_variants_for_game(game.id, db)
+            if var_preds["var_a"] is not None and feat.p_nrfi_var_a is None:
+                feat.p_nrfi_var_a = var_preds["var_a"]
+                updated = True
+            if var_preds["var_b"] is not None and feat.p_nrfi_var_b is None:
+                feat.p_nrfi_var_b = var_preds["var_b"]
+                updated = True
+            if updated:
                 stored += 1
         db.commit()
         logger.info("Stored predictions for %d game(s).", stored)

@@ -206,4 +206,8 @@ class NrfiFeatures(Base):
     p_nrfi_model = Column(Float, nullable=True)
     p_nrfi_market = Column(Float, nullable=True)
 
+    # Variant model predictions (stored alongside baseline for record-keeping)
+    p_nrfi_var_a = Column(Float, nullable=True)   # First-Inning Specialist
+    p_nrfi_var_b = Column(Float, nullable=True)   # Team Trends
+
     game = relationship("Game", back_populates="features")

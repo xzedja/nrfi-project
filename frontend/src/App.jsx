@@ -11,6 +11,7 @@ import GameModal from './components/GameModal'
 import SeasonStats from './components/SeasonStats'
 import HistoryView from './components/HistoryView'
 import SimulatorView from './components/SimulatorView'
+import ScorecardView from './components/ScorecardView'
 
 const _SIGNAL_ORDER = { nrfi_strong: 0, nrfi_lean: 1, yrfi_signal: 2, yrfi_slight: 3, yrfi_lean: 4, no_edge: 5 }
 
@@ -142,6 +143,9 @@ export default function App() {
 
         {/* ── Simulator ── */}
         {activeView === 'simulator' && <SimulatorView />}
+
+        {/* ── Scorecard ── */}
+        {activeView === 'scorecard' && <ScorecardView />}
       </main>
 
       {selectedGame && (

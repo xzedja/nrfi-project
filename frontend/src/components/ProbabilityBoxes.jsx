@@ -13,8 +13,29 @@ function edgeColorClass(edge) {
 const labelCls = 'text-[10px] uppercase tracking-widest text-violet-400/60 dark:text-violet-400/40 mb-1'
 const subCls   = 'text-[10px] text-violet-400/40 dark:text-violet-400/30 mt-0.5'
 
-export default function ProbabilityBoxes({ pModel, pMarket, edge, signal, isHighDisagreement }) {
+function VariantPill({ label, p, pMarket, color }) {
+  if (p == null) return null
+  const varEdge = pMarket != null ? p - pMarket : null
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className={`text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${color}`}>
+        {label}
+      </span>
+      <span className="text-[11px] font-mono font-semibold text-slate-400 tabular-nums">
+        {pct(p)}
+      </span>
+      {varEdge != null && (
+        <span className={`text-[10px] font-mono tabular-nums ${edgeColorClass(varEdge)}`}>
+          {fmtEdge(varEdge)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+export default function ProbabilityBoxes({ pModel, pMarket, edge, signal, isHighDisagreement, varA, varB }) {
   const sig = getSignal(signal)
+  const hasVariants = varA != null || varB != null
 
   return (
     <div className="px-4 py-4">
@@ -65,6 +86,27 @@ export default function ProbabilityBoxes({ pModel, pMarket, edge, signal, isHigh
         <span>↑ mkt &nbsp;|&nbsp; ▏model</span>
         <span>100%</span>
       </div>
+
+      {/* Variant comparison row */}
+      {hasVariants && (
+        <div className="mt-2.5 pt-2 border-t border-violet-100/60 dark:border-violet-500/[0.08]">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[9px] uppercase tracking-widest text-violet-400/40 shrink-0">Variants</span>
+            <VariantPill
+              label="A"
+              p={varA}
+              pMarket={pMarket}
+              color="text-emerald-400/70 bg-emerald-500/[0.08] ring-1 ring-emerald-500/15"
+            />
+            <VariantPill
+              label="B"
+              p={varB}
+              pMarket={pMarket}
+              color="text-amber-400/70 bg-amber-500/[0.08] ring-1 ring-amber-500/15"
+            />
+          </div>
+        </div>
+      )}
 
       {isHighDisagreement && (
         <p className="mt-2 text-[11px] text-amber-500/80 flex items-center gap-1.5">

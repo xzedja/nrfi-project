@@ -20,13 +20,16 @@ from sqlalchemy.orm import Session
 
 from backend.db.models import Game, NrfiFeatures, Odds
 from backend.modeling.model_store import DEFAULT_MODEL_PATH, load_model
-from backend.modeling.train_model import FEATURE_COLS
+from backend.modeling.train_model import FEATURE_COLS, _VARIANT_PATHS
 
 logger = logging.getLogger(__name__)
 
 # Module-level model cache — reloaded automatically when the pkl file changes
 _model = None
 _model_mtime: float | None = None
+
+# Variant model caches: variant_name -> (model, mtime)
+_variant_cache: dict[str, tuple[Any, float | None]] = {}
 
 
 def _get_model():
@@ -39,6 +42,27 @@ def _get_model():
         _model = load_model()
         _model_mtime = current_mtime
     return _model
+
+
+def _get_variant_model(variant: str) -> Any | None:
+    """Load a variant model from disk, with mtime-based auto-reload. Returns None if not found."""
+    global _variant_cache
+    path = _VARIANT_PATHS.get(variant)
+    if not path:
+        return None
+    try:
+        current_mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _variant_cache.get(variant)
+    if cached is None or cached[1] != current_mtime:
+        try:
+            model = load_model(path)
+            _variant_cache[variant] = (model, current_mtime)
+        except Exception:
+            logger.warning("Could not load variant model %s from %s", variant, path)
+            return None
+    return _variant_cache[variant][0]
 
 
 def _features_to_series(feat: NrfiFeatures) -> pd.DataFrame:
@@ -99,6 +123,26 @@ def predict_for_game(game_id: int, db: Session) -> dict[str, Any] | None:
         "p_nrfi_market": round(p_market, 4) if p_market is not None else None,
         "edge": edge,
     }
+
+
+def predict_variants_for_game(game_id: int, db: Session) -> dict[str, float | None]:
+    """
+    Return variant model predictions for a single game.
+    Returns a dict with keys "var_a" and "var_b" (None if model not found or no features).
+    """
+    feat = db.query(NrfiFeatures).filter(NrfiFeatures.game_id == game_id).first()
+    if feat is None:
+        return {"var_a": None, "var_b": None}
+
+    X = _features_to_series(feat)
+    result: dict[str, float | None] = {}
+    for variant in ("var_a", "var_b"):
+        model = _get_variant_model(variant)
+        if model is None:
+            result[variant] = None
+        else:
+            result[variant] = round(float(model.predict_proba(X)[0, 1]), 4)
+    return result
 
 
 def predict_for_today(db: Session) -> list[dict[str, Any]]:

@@ -164,6 +164,8 @@ class DashboardGame(BaseModel):
     inning_1_away_runs: int | None = None
     inning_1_home_runs: int | None = None
     nrfi_result: bool | None = None
+    p_nrfi_var_a: float | None = None
+    p_nrfi_var_b: float | None = None
 
 
 class SignalRecord(BaseModel):
@@ -184,6 +186,20 @@ class YearStats(BaseModel):
 class SeasonStatsResponse(BaseModel):
     current_year: YearStats
     prior_year: YearStats
+
+
+class VariantRecord(BaseModel):
+    variant: str
+    display_name: str
+    description: str
+    current_year: int
+    prior_year: int
+    current_record: SignalRecord
+    prior_record: SignalRecord
+
+
+class ScorecardResponse(BaseModel):
+    variants: list[VariantRecord]
 
 
 class SimulatorEntry(BaseModel):
@@ -441,6 +457,8 @@ def dashboard_today(
             inning_1_away_runs=game.inning_1_away_runs,
             inning_1_home_runs=game.inning_1_home_runs,
             nrfi_result=game.nrfi,
+            p_nrfi_var_a=feat.p_nrfi_var_a,
+            p_nrfi_var_b=feat.p_nrfi_var_b,
         ))
 
     result.sort(key=lambda g: (_SIGNAL_ORDER.get(g.signal, 5), g.game_time_utc or ""))
@@ -538,3 +556,71 @@ def season_stats(db: Session = Depends(get_db)):
         current_year=_year_stats(db, current_year),
         prior_year=_year_stats(db, current_year - 1),
     )
+
+
+_VARIANT_INFO = [
+    {
+        "variant": "baseline",
+        "display_name": "Baseline",
+        "p_col": "p_nrfi_model",
+        "description": "Standard XGBoost. All 26 features at equal weight.",
+    },
+    {
+        "variant": "var_a",
+        "display_name": "Var A · 1st-Inn Specialist",
+        "p_col": "p_nrfi_var_a",
+        "description": "2× first-inning K%, BB%, hard contact%, NRFI rate, 1st-inn ERA. 0.5× general rolling ERA/WHIP.",
+    },
+    {
+        "variant": "var_b",
+        "display_name": "Var B · Team Trends",
+        "p_col": "p_nrfi_var_b",
+        "description": "3× team NRFI rate (L30), 2× team 1st-inn R/G. 0.5× all pitcher features.",
+    },
+]
+
+
+def _variant_record(db: Session, year: int, p_col: str) -> SignalRecord:
+    col = getattr(NrfiFeatures, p_col)
+    rows = (
+        db.query(NrfiFeatures, Game)
+        .join(Game, NrfiFeatures.game_id == Game.id)
+        .filter(
+            extract("year", Game.game_date) == year,
+            NrfiFeatures.nrfi_label.isnot(None),
+            NrfiFeatures.p_nrfi_market.isnot(None),
+            col.isnot(None),
+        )
+        .all()
+    )
+    wins = losses = 0
+    for feat, _ in rows:
+        p_v = getattr(feat, p_col)
+        if p_v is None or feat.p_nrfi_market is None:
+            continue
+        if p_v - feat.p_nrfi_market > 0:
+            if bool(feat.nrfi_label):
+                wins += 1
+            else:
+                losses += 1
+    return _signal_record(wins, losses)
+
+
+@router.get("/scorecard", response_model=ScorecardResponse)
+def scorecard(db: Session = Depends(get_db)):
+    """Return W-L records for all three model variants (current and prior year)."""
+    current_year = date.today().year
+    prior_year = current_year - 1
+    variants = [
+        VariantRecord(
+            variant=info["variant"],
+            display_name=info["display_name"],
+            description=info["description"],
+            current_year=current_year,
+            prior_year=prior_year,
+            current_record=_variant_record(db, current_year, info["p_col"]),
+            prior_record=_variant_record(db, prior_year, info["p_col"]),
+        )
+        for info in _VARIANT_INFO
+    ]
+    return ScorecardResponse(variants=variants)

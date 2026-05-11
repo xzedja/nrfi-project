@@ -29,6 +29,7 @@ import logging
 import sys
 from collections import defaultdict
 from datetime import date
+from typing import Any
 
 sys.path.insert(0, ".")
 
@@ -39,7 +40,7 @@ from backend.data.fetch_odds import american_to_implied, remove_vig
 from backend.db.models import Game, NrfiFeatures, Odds
 from backend.db.session import SessionLocal
 from backend.modeling.model_store import DEFAULT_MODEL_PATH, load_model
-from backend.modeling.train_model import FEATURE_COLS
+from backend.modeling.train_model import FEATURE_COLS, _VARIANT_PATHS
 
 
 # Default vig assumption when no actual NRFI odds are stored
@@ -393,6 +394,170 @@ def run_backtest(
         )
 
 
+def compare_variants(
+    start_year: int = 2022,
+    end_year: int = 2025,
+    min_edge: float = 0.0,
+    real_odds_only: bool = False,
+) -> None:
+    """
+    Load all available variant models and print a side-by-side ROI comparison.
+    Skips any variant whose pkl file doesn't exist yet.
+    """
+    import pandas as pd
+
+    # Load whichever models exist
+    models: dict[str, Any] = {}
+    for name, path in _VARIANT_PATHS.items():
+        try:
+            models[name] = load_model(path)
+            logger.info("Loaded %s from %s", name, path)
+        except FileNotFoundError:
+            logger.warning("Skipping %s — model not found at %s", name, path)
+
+    if not models:
+        logger.error("No variant models found. Run train_variants.py first.")
+        return
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Game, NrfiFeatures)
+            .join(NrfiFeatures, NrfiFeatures.game_id == Game.id)
+            .filter(
+                Game.game_date >= date(start_year, 1, 1),
+                Game.game_date <= date(end_year, 12, 31),
+                NrfiFeatures.nrfi_label.isnot(None),
+            )
+            .order_by(Game.game_date)
+            .all()
+        )
+        game_ids = [game.id for game, _ in rows]
+        odds_rows = (
+            db.query(Odds)
+            .filter(Odds.game_id.in_(game_ids), Odds.first_inn_under_odds.isnot(None))
+            .all()
+        )
+        nrfi_odds_map: dict[int, int] = {o.game_id: o.first_inn_under_odds for o in odds_rows}
+    finally:
+        db.close()
+
+    logger.info("Variant comparison: %d–%d  |  %d games  |  %d with real odds",
+                start_year, end_year, len(rows), len(nrfi_odds_map))
+
+    # Batch predict with each model
+    records = [{col: getattr(feat, col, None) for col in FEATURE_COLS} for _, feat in rows]
+    feat_df = pd.DataFrame(records)
+
+    preds_by_variant: dict[str, list[float]] = {}
+    for name, model in models.items():
+        preds_by_variant[name] = model.predict_proba(feat_df[FEATURE_COLS])[:, 1].tolist()
+
+    # Compute ROI per variant
+    results: dict[str, dict] = {name: {"bets": 0, "wins": 0, "profit": 0.0} for name in models}
+
+    for i, (game, feat) in enumerate(rows):
+        has_real = game.id in nrfi_odds_map
+        if real_odds_only and not has_real:
+            continue
+
+        p_market = feat.p_nrfi_market
+        if p_market is None:
+            raw = nrfi_odds_map.get(game.id)
+            if raw is None:
+                continue
+            p_nrfi_raw = american_to_implied(raw)
+            _, p_market = remove_vig(p_nrfi_raw, 1.0 - p_nrfi_raw + 0.04)
+
+        nrfi_american = nrfi_odds_map.get(game.id, _DEFAULT_NRFI_AMERICAN_ODDS)
+        payout = _payout_multiplier(nrfi_american)
+        won = bool(feat.nrfi_label)
+
+        for name in models:
+            p_model = preds_by_variant[name][i]
+            edge = p_model - p_market
+            if edge < min_edge:
+                continue
+            r = results[name]
+            r["bets"] += 1
+            r["wins"] += int(won)
+            r["profit"] += payout if won else -1.0
+
+    # Print comparison table
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("VARIANT COMPARISON  (%d–%d, edge ≥ %.1f%%, real-odds-only=%s)",
+                start_year, end_year, min_edge * 100, real_odds_only)
+    logger.info("  %-12s  %6s  %10s  %8s  %8s", "Variant", "Bets", "Record", "Hit%", "ROI")
+    logger.info("  " + "-" * 52)
+    for name in ("baseline", "var_a", "var_b"):
+        if name not in results:
+            continue
+        r = results[name]
+        n = r["bets"]
+        if n == 0:
+            logger.info("  %-12s  %6d  %s", name, 0, "(no bets)")
+            continue
+        w = r["wins"]
+        roi = r["profit"] / n * 100
+        logger.info("  %-12s  %6d  %5d-%-4d  %7.1f%%  %+7.2f%%",
+                    name, n, w, n - w, w / n * 100, roi)
+    logger.info("=" * 70)
+
+    # Also show year-by-year for each variant
+    year_results: dict[str, dict[int, dict]] = {
+        name: defaultdict(lambda: {"bets": 0, "wins": 0, "profit": 0.0})
+        for name in models
+    }
+    for i, (game, feat) in enumerate(rows):
+        has_real = game.id in nrfi_odds_map
+        if real_odds_only and not has_real:
+            continue
+        p_market = feat.p_nrfi_market
+        if p_market is None:
+            raw = nrfi_odds_map.get(game.id)
+            if raw is None:
+                continue
+            p_nrfi_raw = american_to_implied(raw)
+            _, p_market = remove_vig(p_nrfi_raw, 1.0 - p_nrfi_raw + 0.04)
+        nrfi_american = nrfi_odds_map.get(game.id, _DEFAULT_NRFI_AMERICAN_ODDS)
+        payout = _payout_multiplier(nrfi_american)
+        won = bool(feat.nrfi_label)
+        year = game.game_date.year
+        for name in models:
+            edge = preds_by_variant[name][i] - p_market
+            if edge < min_edge:
+                continue
+            yr = year_results[name][year]
+            yr["bets"] += 1
+            yr["wins"] += int(won)
+            yr["profit"] += payout if won else -1.0
+
+    all_years = sorted({game.game_date.year for game, _ in rows})
+    logger.info("")
+    logger.info("YEAR-BY-YEAR (edge ≥ %.1f%%)", min_edge * 100)
+    header = f"  {'Year':<6}"
+    for name in ("baseline", "var_a", "var_b"):
+        if name in models:
+            header += f"  {name:<22}"
+    logger.info(header)
+    logger.info("  " + "-" * (6 + 24 * len(models)))
+    for year in all_years:
+        row_str = f"  {year:<6}"
+        for name in ("baseline", "var_a", "var_b"):
+            if name not in models:
+                continue
+            yr = year_results[name].get(year, {"bets": 0, "wins": 0, "profit": 0.0})
+            n = yr["bets"]
+            if n == 0:
+                row_str += f"  {'—':<22}"
+            else:
+                w = yr["wins"]
+                roi = yr["profit"] / n * 100
+                row_str += f"  {w}-{n-w} ({w/n*100:.0f}%) {roi:+.1f}%"
+        logger.info(row_str)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest NRFI model predictions.")
     parser.add_argument("--start", type=int, default=2022, help="Start year (default: 2022)")
@@ -401,9 +566,17 @@ def main() -> None:
                         help="Minimum edge to place a bet, as decimal (default: 0.0 = all positive edges)")
     parser.add_argument("--real-odds-only", action="store_true",
                         help="Only include games with actual NRFI lines (no Poisson approximation)")
+    parser.add_argument("--compare-variants", action="store_true",
+                        help="Side-by-side comparison of baseline, var_a, and var_b")
     args = parser.parse_args()
-    run_backtest(start_year=args.start, end_year=args.end, min_edge=args.min_edge,
-                 real_odds_only=args.real_odds_only)
+    if args.compare_variants:
+        compare_variants(
+            start_year=args.start, end_year=args.end,
+            min_edge=args.min_edge, real_odds_only=args.real_odds_only,
+        )
+    else:
+        run_backtest(start_year=args.start, end_year=args.end, min_edge=args.min_edge,
+                     real_odds_only=args.real_odds_only)
 
 
 if __name__ == "__main__":

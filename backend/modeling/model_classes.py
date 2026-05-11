@@ -71,16 +71,46 @@ class SeasonStartImputer(BaseEstimator, TransformerMixin):
         return X
 
 
+class FeatureWeightTransformer(BaseEstimator, TransformerMixin):
+    """
+    Multiplies specified feature columns by per-column scale factors before
+    fitting/imputation. Baked into the model pkl so variant weights are applied
+    automatically at inference with no external bookkeeping.
+    """
+
+    def __init__(self, weights: dict[str, float] | None = None) -> None:
+        self.weights = weights or {}
+
+    def fit(self, X, y=None) -> "FeatureWeightTransformer":
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        if not self.weights:
+            return X
+        X = X.copy()
+        for col, scale in self.weights.items():
+            if col in X.columns:
+                X[col] = X[col] * scale
+        return X
+
+
 class XGBModel(BaseEstimator, ClassifierMixin):
     """
-    Sklearn-compatible wrapper around (SimpleImputer + XGBClassifier).
+    Sklearn-compatible wrapper around (FeatureWeightTransformer + SeasonStartImputer
+    + XGBClassifier).
 
     Kept separate from Pipeline so we can pass a validation eval_set for early
     stopping — something Pipeline makes awkward.
+
+    variant_weights: per-feature scale factors applied before imputation. Empty
+      dict (default) = baseline behaviour, identical to the old pkl format.
+      Old pkls without weight_transformer_ are handled gracefully via getattr.
     """
 
-    def __init__(self) -> None:
-        self.imputer_: SimpleImputer | None = None
+    def __init__(self, variant_weights: dict[str, float] | None = None) -> None:
+        self.variant_weights = variant_weights or {}
+        self.weight_transformer_: FeatureWeightTransformer | None = None
+        self.imputer_: SeasonStartImputer | None = None
         self.clf_: XGBClassifier | None = None
         self.classes_ = np.array([0, 1])
 
@@ -91,12 +121,16 @@ class XGBModel(BaseEstimator, ClassifierMixin):
         X_val: pd.DataFrame | None = None,
         y_val: pd.Series | None = None,
     ) -> "XGBModel":
+        self.weight_transformer_ = FeatureWeightTransformer(self.variant_weights)
+        X_w = self.weight_transformer_.fit_transform(X)
+
         self.imputer_ = SeasonStartImputer()
-        X_imp = self.imputer_.fit_transform(X)
+        X_imp = self.imputer_.fit_transform(X_w)
 
         eval_set = None
         if X_val is not None and y_val is not None:
-            X_val_imp = self.imputer_.transform(X_val)
+            X_val_w = self.weight_transformer_.transform(X_val)
+            X_val_imp = self.imputer_.transform(X_val_w)
             eval_set = [(X_val_imp, y_val)]
 
         self.clf_ = XGBClassifier(
@@ -119,7 +153,9 @@ class XGBModel(BaseEstimator, ClassifierMixin):
         return self
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        X_imp = self.imputer_.transform(X)
+        wt = getattr(self, "weight_transformer_", None)
+        X_w = wt.transform(X) if wt is not None else X
+        X_imp = self.imputer_.transform(X_w)
         return self.clf_.predict_proba(X_imp)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
